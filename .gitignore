@@ -1,0 +1,8 @@
+.env
+/data/
+/medkvadrat-max-bot
+*.exe
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
