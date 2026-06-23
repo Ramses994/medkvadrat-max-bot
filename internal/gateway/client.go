@@ -61,6 +61,17 @@ type LabPanel struct {
 	Tests         []LabResult `json:"tests"`
 }
 
+type DueReminder struct {
+	MotconsuID       int64  `json:"motconsu_id"`
+	PatientID        int64  `json:"patient_id"`
+	PatientPhone     string `json:"patient_phone"`
+	PatientName      string `json:"patient_name"`
+	DoctorName       string `json:"doctor_name"`
+	DepartmentID     int    `json:"department_id"`
+	DepartmentLabel  string `json:"department_label"`
+	DateConsultation string `json:"date_consultation"`
+}
+
 // ===== Методы =====
 
 func (c *Client) SearchByPhone(ctx context.Context, phone string) ([]Patient, error) {
@@ -86,6 +97,23 @@ func (c *Client) GetLabPanels(ctx context.Context, patientID, daysBack int) ([]L
 		return nil, err
 	}
 	return panels, nil
+}
+
+func (c *Client) DueReminders(ctx context.Context, from, to time.Time) ([]DueReminder, error) {
+	loc, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		loc = time.FixedZone("MSK", 3*3600)
+	}
+	const layout = "2006-01-02T15:04:05"
+	q := url.Values{}
+	q.Set("from", from.In(loc).Format(layout))
+	q.Set("to", to.In(loc).Format(layout))
+
+	var rows []DueReminder
+	if err := c.get(ctx, "/api/reminders/due?"+q.Encode(), &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, out interface{}) error {
