@@ -3,15 +3,18 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	MaxBotToken  string // токен от @MasterBot
-	GatewayURL   string // например http://localhost:8080
-	GatewayToken string // тот же, что в API_TOKEN у api-gateway
-	DBPath       string // путь к SQLite файлу
+	MaxBotToken  string
+	GatewayURL   string
+	GatewayToken string
+	DBPath       string
+
+	KeyboardDebug bool
 }
 
 func Load() (*Config, error) {
@@ -38,5 +41,20 @@ func Load() (*Config, error) {
 		cfg.DBPath = "./data/bot.db"
 	}
 
+	cfg.KeyboardDebug = envBool("KEYBOARD_DEBUG", false)
+
 	return cfg, nil
+}
+
+func envBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

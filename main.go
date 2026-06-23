@@ -43,6 +43,10 @@ func main() {
 		me.Name, me.Username, me.UserID)
 
 	h := handlers.New(mc, gw, store)
+	h.KeyboardDebug = cfg.KeyboardDebug
+	if cfg.KeyboardDebug {
+		log.Println("KEYBOARD_DEBUG=true: /start и «тест-кнопки» шлют demo-клавиатуру")
+	}
 
 	log.Println("Long polling запущен. Ctrl+C для остановки.")
 	runLongPolling(ctx, mc, h)
@@ -93,8 +97,9 @@ func handleOne(ctx context.Context, h *handlers.Handler, u *maxclient.Update) {
 		err = h.OnBotStarted(ctx, u)
 	case "message_created":
 		err = h.OnMessageCreated(ctx, u)
+	case "message_callback":
+		err = h.OnMessageCallback(ctx, u)
 	default:
-		// Нам пока не интересны bot_added_to_chat, message_callback и т.д.
 		log.Printf("пропускаем update_type=%s", u.UpdateType)
 		return
 	}

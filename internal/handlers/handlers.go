@@ -20,9 +20,10 @@ const (
 )
 
 type Handler struct {
-	max     *maxclient.Client
-	gateway *gateway.Client
-	storage *storage.Storage
+	max           *maxclient.Client
+	gateway       *gateway.Client
+	storage       *storage.Storage
+	KeyboardDebug bool
 }
 
 func New(mc *maxclient.Client, gw *gateway.Client, st *storage.Storage) *Handler {
@@ -34,6 +35,10 @@ func New(mc *maxclient.Client, gw *gateway.Client, st *storage.Storage) *Handler
 func (h *Handler) OnBotStarted(ctx context.Context, u *maxclient.Update) error {
 	if u.Payload != "" {
 		log.Printf("bot_started chat=%d payload=%q", u.ChatID, u.Payload)
+	}
+
+	if h.KeyboardDebug {
+		return h.sendKeyboardSmokeTest(ctx, u.ChatID)
 	}
 
 	var link *storage.UserLink
@@ -60,9 +65,16 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 		return fmt.Errorf("storage.GetByUserID: %w", err)
 	}
 
-	// /start работает всегда
+	// /start works always
 	if strings.HasPrefix(strings.ToLower(text), "/start") {
+		if h.KeyboardDebug {
+			return h.sendKeyboardSmokeTest(ctx, chatID)
+		}
 		return h.sendWelcome(ctx, chatID, link)
+	}
+
+	if h.KeyboardDebug && strings.EqualFold(text, "тест-кнопки") {
+		return h.sendKeyboardSmokeTest(ctx, chatID)
 	}
 
 	// ЛОГИКА ОТВЯЗКИ НОМЕРА (работает на любом этапе)

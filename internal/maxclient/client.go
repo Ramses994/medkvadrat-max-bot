@@ -14,9 +14,7 @@ import (
 
 const apiBase = "https://platform-api.max.ru"
 
-// Client — минимальный HTTP-клиент MAX Bot API.
-// Реализованы только три метода: /me, /updates, /messages.
-// Остальное (клавиатуры, вложения, чаты) добавим по мере необходимости.
+// Client — минимальный HTTP-клиент MAX Bot API (/me, /updates, /messages, /answers).
 type Client struct {
 	token string
 	http  *http.Client
@@ -65,15 +63,24 @@ type Message struct {
 	Body      *MessageBody `json:"body,omitempty"`
 }
 
+// Callback is sent when a user presses an inline callback button.
+// Field names match max-bot-api-client-go/schemes.Callback.
+type Callback struct {
+	Timestamp  int64  `json:"timestamp"`
+	CallbackID string `json:"callback_id"`
+	Payload    string `json:"payload,omitempty"`
+	User       *User  `json:"user,omitempty"`
+}
+
 // Update — универсальный объект обновления.
-// Набор полей зависит от update_type; мы используем только bot_started и message_created.
 type Update struct {
-	UpdateType string   `json:"update_type"`
-	Timestamp  int64    `json:"timestamp"`
-	ChatID     int64    `json:"chat_id,omitempty"` // bot_started
-	User       *User    `json:"user,omitempty"`    // bot_started
-	Payload    string   `json:"payload,omitempty"` // bot_started — значение ?start=... из диплинка
-	Message    *Message `json:"message,omitempty"` // message_created
+	UpdateType string    `json:"update_type"`
+	Timestamp  int64     `json:"timestamp"`
+	ChatID     int64     `json:"chat_id,omitempty"` // bot_started
+	User       *User     `json:"user,omitempty"`    // bot_started
+	Payload    string    `json:"payload,omitempty"` // bot_started — значение ?start=... из диплинка
+	Message    *Message  `json:"message,omitempty"` // message_created, message_callback
+	Callback   *Callback `json:"callback,omitempty"`
 }
 
 type UpdatesResponse struct {
@@ -123,21 +130,67 @@ type sendMessageBody struct {
 	Text string `json:"text"`
 }
 
-// SendMessage — отправка текста в диалог (private).
-// chatID для bot_started берём из update.ChatID, для message_created — из extractChatID.
+// SendMessage sends text to a private chat by chat_id.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) error {
-	body, _ := json.Marshal(sendMessageBody{Text: text})
+	return c.SendMessageWithKeyboard(ctx, chatID, false, text, nil)
+}
+
+// SendToUser sends text by user_id (cold outreach / reminders).
+func (c *Client) SendToUser(ctx context.Context, userID int64, text string) error {
+	return c.SendMessageWithKeyboard(ctx, userID, true, text, nil)
+}
+
+// SendMessageWithKeyboard posts a message with optional inline keyboard.
+// When rows is nil/empty, only text is sent. Authorization: token without Bearer.
+func (c *Client) SendMessageWithKeyboard(ctx context.Context, recipientID int64, byUserID bool, text string, rows [][]CallbackButton) error {
+	var body []byte
+	var err error
+	if len(rows) > 0 {
+		msg := outboundMessage{
+			Text:        text,
+			Attachments: []interface{}{newInlineKeyboardAttachment(rows)},
+		}
+		body, err = json.Marshal(msg)
+	} else {
+		body, err = json.Marshal(sendMessageBody{Text: text})
+	}
+	if err != nil {
+		return err
+	}
 
 	q := url.Values{}
-	q.Set("chat_id", strconv.FormatInt(chatID, 10))
+	if byUserID {
+		q.Set("user_id", strconv.FormatInt(recipientID, 10))
+	} else {
+		q.Set("chat_id", strconv.FormatInt(recipientID, 10))
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST",
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		apiBase+"/messages?"+q.Encode(), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return c.do(req, nil)
+}
 
+// AnswerCallback acknowledges a button press (POST /answers?callback_id=...).
+func (c *Client) AnswerCallback(ctx context.Context, callbackID, notification string) error {
+	if callbackID == "" {
+		return fmt.Errorf("callback_id is empty")
+	}
+	body, err := json.Marshal(callbackAnswerBody{Notification: notification})
+	if err != nil {
+		return err
+	}
+	q := url.Values{}
+	q.Set("callback_id", callbackID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		apiBase+"/answers?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
 	return c.do(req, nil)
 }
 
