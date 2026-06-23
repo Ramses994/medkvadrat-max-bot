@@ -30,9 +30,13 @@ func New(baseURL, token string) *Client {
 // ===== Типы, совместимые с api-gateway =====
 
 type apiResponse struct {
-	Success bool            `json:"success"`
-	Data    json.RawMessage `json:"data"`
-	Error   string          `json:"error"`
+	Success      bool            `json:"success"`
+	Data         json.RawMessage `json:"data"`
+	Error        string          `json:"error"`
+	ErrorDetails *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error_details"`
 }
 
 type Patient struct {
