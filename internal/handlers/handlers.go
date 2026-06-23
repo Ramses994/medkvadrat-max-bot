@@ -38,7 +38,11 @@ func (h *Handler) OnBotStarted(ctx context.Context, u *maxclient.Update) error {
 	}
 
 	if h.KeyboardDebug {
-		return h.sendKeyboardSmokeTest(ctx, u.ChatID)
+		userID := int64(0)
+		if u.User != nil {
+			userID = u.User.UserID
+		}
+		return h.sendKeyboardSmokeTest(ctx, userID)
 	}
 
 	var link *storage.UserLink
@@ -68,13 +72,13 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 	// /start works always
 	if strings.HasPrefix(strings.ToLower(text), "/start") {
 		if h.KeyboardDebug {
-			return h.sendKeyboardSmokeTest(ctx, chatID)
+			return h.sendKeyboardSmokeTest(ctx, userID)
 		}
 		return h.sendWelcome(ctx, chatID, link)
 	}
 
 	if h.KeyboardDebug && strings.EqualFold(text, "тест-кнопки") {
-		return h.sendKeyboardSmokeTest(ctx, chatID)
+		return h.sendKeyboardSmokeTest(ctx, userID)
 	}
 
 	// ЛОГИКА ОТВЯЗКИ НОМЕРА (работает на любом этапе)

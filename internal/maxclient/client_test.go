@@ -6,6 +6,35 @@ import (
 	"testing"
 )
 
+func TestOutboundMessage_PlainTextOnlyJSON(t *testing.T) {
+	body, err := marshalOutboundBody("Привет!", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	want := `{"text":"Привет!"}`
+	if got != want {
+		t.Fatalf("plain text JSON changed: got %s want %s", got, want)
+	}
+	if strings.Contains(got, "attachments") {
+		t.Fatalf("attachments must be absent: %s", got)
+	}
+}
+
+func TestOutboundMessage_EmptyRowsSameAsNil(t *testing.T) {
+	nilBody, err := marshalOutboundBody("ok", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyBody, err := marshalOutboundBody("ok", [][]CallbackButton{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(nilBody) != string(emptyBody) {
+		t.Fatalf("nil vs empty rows: %q vs %q", nilBody, emptyBody)
+	}
+}
+
 func TestOutboundMessage_WithInlineKeyboard(t *testing.T) {
 	rows := [][]CallbackButton{{
 		{Type: "callback", Text: "Да", Payload: "test:yes", Intent: "positive"},

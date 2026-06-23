@@ -143,17 +143,7 @@ func (c *Client) SendToUser(ctx context.Context, userID int64, text string) erro
 // SendMessageWithKeyboard posts a message with optional inline keyboard.
 // When rows is nil/empty, only text is sent. Authorization: token without Bearer.
 func (c *Client) SendMessageWithKeyboard(ctx context.Context, recipientID int64, byUserID bool, text string, rows [][]CallbackButton) error {
-	var body []byte
-	var err error
-	if len(rows) > 0 {
-		msg := outboundMessage{
-			Text:        text,
-			Attachments: []interface{}{newInlineKeyboardAttachment(rows)},
-		}
-		body, err = json.Marshal(msg)
-	} else {
-		body, err = json.Marshal(sendMessageBody{Text: text})
-	}
+	body, err := marshalOutboundBody(text, rows)
 	if err != nil {
 		return err
 	}

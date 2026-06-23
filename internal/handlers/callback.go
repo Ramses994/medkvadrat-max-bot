@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
@@ -27,12 +28,16 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 	return h.max.AnswerCallback(ctx, cb.CallbackID, "Принято")
 }
 
-func (h *Handler) sendKeyboardSmokeTest(ctx context.Context, chatID int64) error {
+func (h *Handler) sendKeyboardSmokeTest(ctx context.Context, userID int64) error {
+	if userID == 0 {
+		return fmt.Errorf("keyboard smoke: user_id is 0")
+	}
+	log.Printf("keyboard smoke: SendToUser user_id=%d", userID)
 	rows := [][]maxclient.CallbackButton{{
 		{Type: "callback", Text: "Да", Payload: "test:yes", Intent: "positive"},
 		{Type: "callback", Text: "Нет", Payload: "test:no", Intent: "negative"},
 	}}
-	return h.max.SendMessageWithKeyboard(ctx, chatID, false,
-		"Тест inline-клавиатуры MAX. Нажмите кнопку — в логах должен появиться message_callback.",
+	return h.max.SendMessageWithKeyboard(ctx, userID, true,
+		"Тест inline-клавиатуры MAX (холодная доставка по user_id). Нажмите кнопку — в логах должен появиться message_callback.",
 		rows)
 }
