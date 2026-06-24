@@ -28,7 +28,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		chatID = u.Message.Recipient.ChatID
 	}
 
-	action, motconsuID, ok := apptconfirm.ParsePayload(cb.Payload)
+	action, planningID, ok := apptconfirm.ParsePayload(cb.Payload)
 	if !ok {
 		log.Printf("message_callback bad payload chat_id=%d user_id=%d payload=%q", chatID, userID, cb.Payload)
 		return answer("Не удалось обработать нажатие")
@@ -49,13 +49,13 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		return answer("Профиль не найден, отправьте номер телефона")
 	}
 
-	if err := h.gateway.PostConfirmation(ctx, motconsuID, status, link.PatientID); err != nil {
-		log.Printf("POST confirmations motconsu=%d status=%s patient=%d user=%d: %v",
-			motconsuID, status, link.PatientID, userID, err)
+	if err := h.gateway.PostConfirmation(ctx, planningID, status, link.PatientID); err != nil {
+		log.Printf("POST confirmations planning=%d status=%s patient=%d user=%d: %v",
+			planningID, status, link.PatientID, userID, err)
 		return answer("Не удалось сохранить, попробуйте позже или позвоните в регистратуру.")
 	}
-	log.Printf("POST confirmations ok motconsu=%d status=%s patient=%d user=%d",
-		motconsuID, status, link.PatientID, userID)
+	log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d",
+		planningID, status, link.PatientID, userID)
 
 	switch status {
 	case "confirmed":

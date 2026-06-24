@@ -51,10 +51,10 @@ func New(path string) (*Storage, error) {
 	CREATE INDEX IF NOT EXISTS idx_user_links_patient ON user_links(patient_id);
 
 	CREATE TABLE IF NOT EXISTS reminder_log (
-		motconsu_id INTEGER NOT NULL,
+		planning_id INTEGER NOT NULL,
 		kind        TEXT    NOT NULL,
 		sent_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (motconsu_id, kind)
+		PRIMARY KEY (planning_id, kind)
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -128,11 +128,29 @@ func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 	return out, rows.Err()
 }
 
-func (s *Storage) WasReminderSent(motconsuID int64, kind string) (bool, error) {
+// DistinctPatientIDs returns all patient_id values from user_links.
+func (s *Storage) DistinctPatientIDs() ([]int64, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links ORDER BY patient_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *Storage) WasReminderSent(planningID int64, kind string) (bool, error) {
 	var n int
 	err := s.db.QueryRow(`
-		SELECT 1 FROM reminder_log WHERE motconsu_id = ? AND kind = ? LIMIT 1`,
-		motconsuID, kind).Scan(&n)
+		SELECT 1 FROM reminder_log WHERE planning_id = ? AND kind = ? LIMIT 1`,
+		planningID, kind).Scan(&n)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -142,9 +160,9 @@ func (s *Storage) WasReminderSent(motconsuID int64, kind string) (bool, error) {
 	return true, nil
 }
 
-func (s *Storage) MarkReminderSent(motconsuID int64, kind string) error {
+func (s *Storage) MarkReminderSent(planningID int64, kind string) error {
 	_, err := s.db.Exec(`
-		INSERT OR IGNORE INTO reminder_log (motconsu_id, kind) VALUES (?, ?)`,
-		motconsuID, kind)
+		INSERT OR IGNORE INTO reminder_log (planning_id, kind) VALUES (?, ?)`,
+		planningID, kind)
 	return err
 }

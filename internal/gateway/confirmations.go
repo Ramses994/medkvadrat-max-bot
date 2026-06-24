@@ -23,20 +23,20 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("gateway %d: %s", e.StatusCode, e.Body)
 }
 
-func (e *HTTPError) IsNotFound() bool { return e.StatusCode == http.StatusNotFound }
+func (e *HTTPError) IsNotFound() bool   { return e.StatusCode == http.StatusNotFound }
 func (e *HTTPError) IsForbidden() bool { return e.StatusCode == http.StatusForbidden }
 
 type confirmationBody struct {
-	MotconsuID int64  `json:"motconsu_id"`
+	PlanningID int64  `json:"planning_id"`
 	PatientID  int64  `json:"patient_id"`
 	Status     string `json:"status"`
 	Source     string `json:"source"`
 }
 
 // PostConfirmation records patient response (POST /api/internal/confirmations).
-func (c *Client) PostConfirmation(ctx context.Context, motconsuID int64, status string, patientID int64) error {
+func (c *Client) PostConfirmation(ctx context.Context, planningID int64, status string, patientID int64) error {
 	body, err := json.Marshal(confirmationBody{
-		MotconsuID: motconsuID,
+		PlanningID: planningID,
 		PatientID:  patientID,
 		Status:     status,
 		Source:     "max",

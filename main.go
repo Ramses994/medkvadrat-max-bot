@@ -54,6 +54,7 @@ func main() {
 			Gateway:   gw,
 			Storage:   store,
 			Messenger: reminders.NewMaxMessenger(mc),
+			Allowlist: cfg.ReminderAllowlistPatients,
 		}
 		go reminders.Start(ctx, cfg.ReminderTick, runner)
 		log.Printf("Планировщик напоминаний запущен (тик %s)", cfg.ReminderTick)

@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// ParsePayload splits "action:motconsu_id" callback payloads.
-func ParsePayload(payload string) (action string, motconsuID int64, ok bool) {
+// ParsePayload splits "action:planning_id" callback payloads.
+func ParsePayload(payload string) (action string, planningID int64, ok bool) {
 	payload = strings.TrimSpace(payload)
 	i := strings.IndexByte(payload, ':')
 	if i <= 0 || i >= len(payload)-1 {

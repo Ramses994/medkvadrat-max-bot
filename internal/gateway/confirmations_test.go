@@ -22,18 +22,18 @@ func TestPostConfirmation_OK(t *testing.T) {
 			t.Fatal(err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true,"data":{"motconsu_id":123,"status":"confirmed"}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"planning_id":11737097,"status":"confirmed"}}`))
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "secret-token")
-	if err := c.PostConfirmation(context.Background(), 123, "confirmed", 456); err != nil {
+	if err := c.PostConfirmation(context.Background(), 11737097, "confirmed", 1587578); err != nil {
 		t.Fatal(err)
 	}
 	if auth != "Bearer secret-token" {
 		t.Fatalf("auth=%q", auth)
 	}
-	if got.MotconsuID != 123 || got.PatientID != 456 || got.Status != "confirmed" || got.Source != "max" {
+	if got.PlanningID != 11737097 || got.PatientID != 1587578 || got.Status != "confirmed" || got.Source != "max" {
 		t.Fatalf("body=%+v", got)
 	}
 }
@@ -41,17 +41,14 @@ func TestPostConfirmation_OK(t *testing.T) {
 func TestPostConfirmation_Forbidden(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		_, _ = io.WriteString(w, `{"success":false,"error":"forbidden","error_details":{"code":"PATIENT_MISMATCH","message":"mismatch"}}`)
+		_, _ = io.WriteString(w, `{"success":false,"error_details":{"code":"PATIENT_MISMATCH"}}`)
 	}))
 	defer srv.Close()
 
 	err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "confirmed", 2)
 	he, ok := err.(*HTTPError)
-	if !ok {
-		t.Fatalf("want *HTTPError, got %T: %v", err, err)
-	}
-	if !he.IsForbidden() || he.Code != "PATIENT_MISMATCH" {
-		t.Fatalf("err=%+v", he)
+	if !ok || !he.IsForbidden() || he.Code != "PATIENT_MISMATCH" {
+		t.Fatalf("err=%v", err)
 	}
 }
 

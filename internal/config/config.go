@@ -15,9 +15,10 @@ type Config struct {
 	GatewayToken string
 	DBPath       string
 
-	ReminderEnabled bool
-	ReminderTick    time.Duration
-	KeyboardDebug   bool
+	ReminderEnabled           bool
+	ReminderTick              time.Duration
+	ReminderAllowlistPatients []int64
+	KeyboardDebug             bool
 }
 
 func Load() (*Config, error) {
@@ -49,9 +50,34 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("REMINDER_TICK: %w", err)
 	}
 	cfg.ReminderTick = tick
+	cfg.ReminderAllowlistPatients = parseCSVInt64s(os.Getenv("REMINDER_ALLOWLIST_PATIENTS"))
 	cfg.KeyboardDebug = envBoolDefaultFalse("KEYBOARD_DEBUG", false)
 
 	return cfg, nil
+}
+
+func parseCSVInt64s(raw string) []int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]int64, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		var id int64
+		if _, err := fmt.Sscanf(p, "%d", &id); err != nil || id <= 0 {
+			continue
+		}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func envBoolDefaultTrue(key string, def bool) bool {

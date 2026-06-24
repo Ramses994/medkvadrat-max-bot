@@ -4,18 +4,18 @@ import "testing"
 
 func TestParsePayload_OK(t *testing.T) {
 	cases := []struct {
-		in       string
-		action   string
-		motconsu int64
+		in        string
+		action    string
+		planningID int64
 	}{
-		{"confirm:123", "confirm", 123},
+		{"confirm:11737097", "confirm", 11737097},
 		{"reschedule:42", "reschedule", 42},
 		{"DECLINE:99", "decline", 99},
 	}
 	for _, c := range cases {
 		action, id, ok := ParsePayload(c.in)
-		if !ok || action != c.action || id != c.motconsu {
-			t.Fatalf("ParsePayload(%q) = (%q, %d, %v), want (%q, %d, true)", c.in, action, id, ok, c.action, c.motconsu)
+		if !ok || action != c.action || id != c.planningID {
+			t.Fatalf("ParsePayload(%q) = (%q, %d, %v), want (%q, %d, true)", c.in, action, id, ok, c.action, c.planningID)
 		}
 	}
 }

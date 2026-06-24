@@ -11,13 +11,15 @@ import (
 )
 
 type fakeDueGateway struct {
-	err   error
-	rows  []gateway.DueReminder
-	calls int
+	err        error
+	rows       []gateway.DueReminder
+	calls      int
+	lastPatients []int64
 }
 
-func (f *fakeDueGateway) DueReminders(ctx context.Context, from, to time.Time) ([]gateway.DueReminder, error) {
+func (f *fakeDueGateway) DueReminders(ctx context.Context, from, to time.Time, patientIDs []int64) ([]gateway.DueReminder, error) {
 	f.calls++
+	f.lastPatients = patientIDs
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -29,7 +31,7 @@ type fakeMessenger struct {
 	err  error
 }
 
-func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, motconsuID int64) error {
+func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -43,6 +45,7 @@ func TestRunner_Tick_GatewayErrorDoesNotPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	_ = store.Link(42, 6789, "79991234567", "Иванова")
 
 	gw := &fakeDueGateway{err: errors.New("gateway down")}
 	msg := &fakeMessenger{}
@@ -74,7 +77,7 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 
 	now := msk(2026, time.June, 23, 10, 30)
 	row := gateway.DueReminder{
-		MotconsuID:       12345,
+		PlanningID:       11737097,
 		PatientID:        6789,
 		DoctorName:       "Смирнов Иван",
 		DepartmentLabel:  "Каширка",
@@ -94,5 +97,32 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	r.Tick(context.Background())
 	if len(msg.sent) != 0 {
 		t.Fatalf("second tick: duplicate send %v", msg.sent)
+	}
+}
+
+func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
+	store, err := storage.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_ = store.Link(42, 6789, "79991234567", "Иванова")
+	_ = store.Link(43, 9999, "79990000000", "Другой")
+
+	gw := &fakeDueGateway{} // gateway returns only allowlisted patients; none due in window
+	msg := &fakeMessenger{}
+	r := &Runner{
+		Gateway:   gw,
+		Storage:   store,
+		Messenger: msg,
+		Allowlist: []int64{6789},
+		Now:       func() time.Time { return msk(2026, time.June, 23, 10, 30) },
+	}
+	r.Tick(context.Background())
+	if len(gw.lastPatients) != 1 || gw.lastPatients[0] != 6789 {
+		t.Fatalf("gateway patient_ids=%v", gw.lastPatients)
+	}
+	if len(msg.sent) != 0 {
+		t.Fatalf("expected no sends, got %v", msg.sent)
 	}
 }
