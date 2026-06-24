@@ -8,6 +8,12 @@ func TestShortLabel_Kurkino(t *testing.T) {
 	}
 }
 
+func TestShortLabel_FallbackCode(t *testing.T) {
+	if got := ShortLabel(0, "Неизвестный"); got != "Неизвестный" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestDisplayLine_Kurkino(t *testing.T) {
 	got := DisplayLine(3, "Куркино")
 	want := "Куркино, г. Москва, ул. Ландышевая, 14к1"
