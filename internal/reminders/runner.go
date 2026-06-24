@@ -21,13 +21,14 @@ type Messenger interface {
 
 // DueGateway fetches upcoming appointments from api-gateway.
 type DueGateway interface {
-	DueReminders(ctx context.Context, from, to time.Time) ([]gateway.DueReminder, error)
+	DueReminders(ctx context.Context, from, to time.Time, patientIDs []int64) ([]gateway.DueReminder, error)
 }
 
 type Runner struct {
 	Gateway   DueGateway
 	Storage   *storage.Storage
 	Messenger Messenger
+	Allowlist []int64
 	Now       func() time.Time
 }
 
@@ -44,7 +45,17 @@ func (r *Runner) Tick(ctx context.Context) {
 	from := now
 	to := now.Add(d3Lead + MaxGrace)
 
-	appointments, err := r.Gateway.DueReminders(ctx, from, to)
+	linked, err := r.Storage.DistinctPatientIDs()
+	if err != nil {
+		log.Printf("reminders: DistinctPatientIDs: %v", err)
+		return
+	}
+	targetPatients := TargetPatients(linked, r.Allowlist)
+	if len(targetPatients) == 0 {
+		return
+	}
+
+	appointments, err := r.Gateway.DueReminders(ctx, from, to, targetPatients)
 	if err != nil {
 		log.Printf("reminders: gateway.DueReminders: %v", err)
 		return
@@ -59,13 +70,13 @@ func (r *Runner) Tick(ctx context.Context) {
 func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now time.Time, loc *time.Location) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("reminders: panic processing motconsu_id=%d: %v", appt.MotconsuID, rec)
+			log.Printf("reminders: panic processing planning_id=%d: %v", appt.PlanningID, rec)
 		}
 	}()
 
 	apptTime, err := time.ParseInLocation(apptTimeLayout, appt.DateConsultation, loc)
 	if err != nil {
-		log.Printf("reminders: parse date_consultation %q motconsu_id=%d: %v", appt.DateConsultation, appt.MotconsuID, err)
+		log.Printf("reminders: parse date_consultation %q planning_id=%d: %v", appt.DateConsultation, appt.PlanningID, err)
 		return
 	}
 
@@ -86,21 +97,19 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 	text := FormatMessage(appt.DepartmentLabel, appt.DoctorName, apptTime)
 
 	for _, kind := range kinds {
-		sent, err := r.Storage.WasReminderSent(appt.MotconsuID, string(kind))
+		sent, err := r.Storage.WasReminderSent(appt.PlanningID, string(kind))
 		if err != nil {
-			log.Printf("reminders: WasReminderSent(%d,%s): %v", appt.MotconsuID, kind, err)
+			log.Printf("reminders: WasReminderSent(%d,%s): %v", appt.PlanningID, kind, err)
 			continue
 		}
 		if sent {
 			continue
 		}
 
-		// MVP: mark sent after the first successful delivery to any linked MAX user,
-		// so we do not spam the same kind to every family member on the next tick.
 		var delivered bool
 		for _, u := range users {
 			if err := r.Messenger.SendToUser(ctx, u.UserID, text); err != nil {
-				log.Printf("reminders: send user=%d motconsu=%d kind=%s: %v", u.UserID, appt.MotconsuID, kind, err)
+				log.Printf("reminders: send user=%d planning=%d kind=%s: %v", u.UserID, appt.PlanningID, kind, err)
 				continue
 			}
 			delivered = true
@@ -109,8 +118,8 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		if !delivered {
 			continue
 		}
-		if err := r.Storage.MarkReminderSent(appt.MotconsuID, string(kind)); err != nil {
-			log.Printf("reminders: MarkReminderSent(%d,%s): %v", appt.MotconsuID, kind, err)
+		if err := r.Storage.MarkReminderSent(appt.PlanningID, string(kind)); err != nil {
+			log.Printf("reminders: MarkReminderSent(%d,%s): %v", appt.PlanningID, kind, err)
 		}
 	}
 }
@@ -134,7 +143,6 @@ func Start(ctx context.Context, tick time.Duration, runner *Runner) {
 	}
 }
 
-// maxMessenger adapts maxclient.Client to Messenger (private chat: user_id == chat_id).
 type maxMessenger struct {
 	c *maxclient.Client
 }

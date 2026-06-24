@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -62,7 +63,7 @@ type LabPanel struct {
 }
 
 type DueReminder struct {
-	MotconsuID       int64  `json:"motconsu_id"`
+	PlanningID       int64  `json:"planning_id"`
 	PatientID        int64  `json:"patient_id"`
 	PatientPhone     string `json:"patient_phone"`
 	PatientName      string `json:"patient_name"`
@@ -70,6 +71,7 @@ type DueReminder struct {
 	DepartmentID     int    `json:"department_id"`
 	DepartmentLabel  string `json:"department_label"`
 	DateConsultation string `json:"date_consultation"`
+	Status           int    `json:"status"`
 }
 
 // ===== Методы =====
@@ -99,7 +101,7 @@ func (c *Client) GetLabPanels(ctx context.Context, patientID, daysBack int) ([]L
 	return panels, nil
 }
 
-func (c *Client) DueReminders(ctx context.Context, from, to time.Time) ([]DueReminder, error) {
+func (c *Client) DueReminders(ctx context.Context, from, to time.Time, patientIDs []int64) ([]DueReminder, error) {
 	loc, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {
 		loc = time.FixedZone("MSK", 3*3600)
@@ -108,6 +110,13 @@ func (c *Client) DueReminders(ctx context.Context, from, to time.Time) ([]DueRem
 	q := url.Values{}
 	q.Set("from", from.In(loc).Format(layout))
 	q.Set("to", to.In(loc).Format(layout))
+	if len(patientIDs) > 0 {
+		parts := make([]string, len(patientIDs))
+		for i, id := range patientIDs {
+			parts[i] = strconv.FormatInt(id, 10)
+		}
+		q.Set("patient_ids", strings.Join(parts, ","))
+	}
 
 	var rows []DueReminder
 	if err := c.get(ctx, "/api/reminders/due?"+q.Encode(), &rows); err != nil {
