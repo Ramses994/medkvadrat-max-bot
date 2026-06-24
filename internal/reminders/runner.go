@@ -94,7 +94,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		return
 	}
 
-	text := FormatMessage(appt.DepartmentLabel, appt.DoctorName, apptTime)
+	text := FormatMessage(appt.BranchID, appt.BranchCode, appt.DoctorName, apptTime)
 
 	for _, kind := range kinds {
 		sent, err := r.Storage.WasReminderSent(appt.PlanningID, string(kind))

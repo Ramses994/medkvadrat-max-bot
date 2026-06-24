@@ -91,7 +91,7 @@ func TestDueKinds(t *testing.T) {
 }
 
 func TestFormatMessage(t *testing.T) {
-	text := FormatMessage("Каширка", "Гусев П.", msk(2026, time.June, 24, 10, 30))
+	text := FormatMessage(106, "Каширка", "Гусев П.", msk(2026, time.June, 24, 10, 30))
 	if text == "" {
 		t.Fatal("empty message")
 	}
