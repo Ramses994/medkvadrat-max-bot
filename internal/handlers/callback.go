@@ -5,16 +5,20 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/apptconfirm"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 )
 
-// OnMessageCallback logs callback payload and acknowledges the button press.
-// Business logic (appointment confirm/cancel) arrives in PR #3b.
 func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) error {
 	if u.Callback == nil {
 		return nil
 	}
 	cb := u.Callback
+	callbackID := cb.CallbackID
+	answer := func(text string) error {
+		return h.max.AnswerCallback(ctx, callbackID, text)
+	}
+
 	var userID int64
 	if cb.User != nil {
 		userID = cb.User.UserID
@@ -23,9 +27,46 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 	if u.Message != nil && u.Message.Recipient != nil {
 		chatID = u.Message.Recipient.ChatID
 	}
-	log.Printf("message_callback chat_id=%d user_id=%d callback_id=%s payload=%q",
-		chatID, userID, cb.CallbackID, cb.Payload)
-	return h.max.AnswerCallback(ctx, cb.CallbackID, "Принято")
+
+	action, planningID, ok := apptconfirm.ParsePayload(cb.Payload)
+	if !ok {
+		log.Printf("message_callback bad payload chat_id=%d user_id=%d payload=%q", chatID, userID, cb.Payload)
+		return answer("Не удалось обработать нажатие")
+	}
+
+	status, ok := apptconfirm.ActionToStatus(action)
+	if !ok {
+		log.Printf("message_callback unknown action chat_id=%d user_id=%d action=%q", chatID, userID, action)
+		return answer("Не удалось обработать нажатие")
+	}
+
+	link, err := h.storage.GetByUserID(userID)
+	if err != nil {
+		log.Printf("message_callback storage user_id=%d: %v", userID, err)
+		return answer("Произошла ошибка, попробуйте позже")
+	}
+	if link == nil {
+		return answer("Профиль не найден, отправьте номер телефона")
+	}
+
+	if err := h.gateway.PostConfirmation(ctx, planningID, status, link.PatientID); err != nil {
+		log.Printf("POST confirmations planning=%d status=%s patient=%d user=%d: %v",
+			planningID, status, link.PatientID, userID, err)
+		return answer("Не удалось сохранить, попробуйте позже или позвоните в регистратуру.")
+	}
+	log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d",
+		planningID, status, link.PatientID, userID)
+
+	switch status {
+	case "confirmed":
+		return answer("Спасибо, ждём вас!")
+	case "declined":
+		return answer("Записали, что вы не придёте.")
+	case "reschedule":
+		return answer("Передали в регистратуру — с вами свяжутся для переноса.")
+	default:
+		return answer("Принято")
+	}
 }
 
 func (h *Handler) sendKeyboardSmokeTest(ctx context.Context, userID int64) error {
