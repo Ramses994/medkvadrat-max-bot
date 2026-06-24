@@ -20,3 +20,18 @@ func ShortLabel(branchID int, branchCode string) string {
 	}
 	return branchCode
 }
+
+// DisplayLine returns "Name, Address" for reminder text; falls back to branchCode.
+func DisplayLine(branchID int, branchCode string) string {
+	if b, ok := ByID[branchID]; ok {
+		return b.displayLine()
+	}
+	return branchCode
+}
+
+func (b Branch) displayLine() string {
+	if b.Address == "" {
+		return b.Name
+	}
+	return b.Name + ", " + b.Address
+}

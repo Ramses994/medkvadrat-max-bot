@@ -31,7 +31,7 @@ type fakeMessenger struct {
 	err  error
 }
 
-func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string) error {
+func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64) error {
 	if f.err != nil {
 		return f.err
 	}

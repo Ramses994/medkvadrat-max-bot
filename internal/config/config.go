@@ -10,18 +10,18 @@ import (
 )
 
 type Config struct {
-	MaxBotToken  string // токен от @MasterBot
-	GatewayURL   string // например http://localhost:8080
-	GatewayToken string // тот же, что в API_TOKEN у api-gateway
-	DBPath       string // путь к SQLite файлу
+	MaxBotToken  string
+	GatewayURL   string
+	GatewayToken string
+	DBPath       string
 
 	ReminderEnabled           bool
 	ReminderTick              time.Duration
 	ReminderAllowlistPatients []int64
+	KeyboardDebug             bool
 }
 
 func Load() (*Config, error) {
-	// В проде переменные приходят от docker/systemd, .env только для локалки
 	_ = godotenv.Load()
 
 	cfg := &Config{
@@ -44,13 +44,14 @@ func Load() (*Config, error) {
 		cfg.DBPath = "./data/bot.db"
 	}
 
-	cfg.ReminderEnabled = envBool("REMINDER_ENABLED", true)
+	cfg.ReminderEnabled = envBoolDefaultTrue("REMINDER_ENABLED", true)
 	tick, err := envDuration("REMINDER_TICK", 5*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("REMINDER_TICK: %w", err)
 	}
 	cfg.ReminderTick = tick
 	cfg.ReminderAllowlistPatients = parseCSVInt64s(os.Getenv("REMINDER_ALLOWLIST_PATIENTS"))
+	cfg.KeyboardDebug = envBoolDefaultFalse("KEYBOARD_DEBUG", false)
 
 	return cfg, nil
 }
@@ -79,7 +80,7 @@ func parseCSVInt64s(raw string) []int64 {
 	return out
 }
 
-func envBool(key string, def bool) bool {
+func envBoolDefaultTrue(key string, def bool) bool {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return def
@@ -89,6 +90,19 @@ func envBool(key string, def bool) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func envBoolDefaultFalse(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

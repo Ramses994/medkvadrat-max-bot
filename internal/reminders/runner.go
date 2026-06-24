@@ -14,9 +14,9 @@ const apptTimeLayout = "2006-01-02 15:04"
 
 const d3Lead = 72 * time.Hour
 
-// Messenger sends a reminder to a MAX user (private dialog).
+// Messenger sends a reminder to a MAX user (cold delivery by user_id).
 type Messenger interface {
-	SendToUser(ctx context.Context, userID int64, text string) error
+	SendToUser(ctx context.Context, userID int64, text string, planningID int64) error
 }
 
 // DueGateway fetches upcoming appointments from api-gateway.
@@ -108,7 +108,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 
 		var delivered bool
 		for _, u := range users {
-			if err := r.Messenger.SendToUser(ctx, u.UserID, text); err != nil {
+			if err := r.Messenger.SendToUser(ctx, u.UserID, text, appt.PlanningID); err != nil {
 				log.Printf("reminders: send user=%d planning=%d kind=%s: %v", u.UserID, appt.PlanningID, kind, err)
 				continue
 			}
@@ -147,8 +147,9 @@ type maxMessenger struct {
 	c *maxclient.Client
 }
 
-func (m maxMessenger) SendToUser(ctx context.Context, userID int64, text string) error {
-	return m.c.SendMessage(ctx, userID, text)
+func (m maxMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64) error {
+	rows := ConfirmationKeyboard(planningID)
+	return m.c.SendMessageWithKeyboard(ctx, userID, true, text, rows)
 }
 
 func NewMaxMessenger(c *maxclient.Client) Messenger {
