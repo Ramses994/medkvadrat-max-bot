@@ -11,6 +11,7 @@ import (
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/handlers"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/reminders"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
 )
 
@@ -43,6 +44,19 @@ func main() {
 		me.Name, me.Username, me.UserID)
 
 	h := handlers.New(mc, gw, store)
+
+	if cfg.ReminderEnabled {
+		runner := &reminders.Runner{
+			Gateway:   gw,
+			Storage:   store,
+			Messenger: reminders.NewMaxMessenger(mc),
+			Allowlist: cfg.ReminderAllowlistPatients,
+		}
+		go reminders.Start(ctx, cfg.ReminderTick, runner)
+		log.Printf("Планировщик напоминаний запущен (тик %s)", cfg.ReminderTick)
+	} else {
+		log.Println("Планировщик напоминаний отключён (REMINDER_ENABLED=false)")
+	}
 
 	log.Println("Long polling запущен. Ctrl+C для остановки.")
 	runLongPolling(ctx, mc, h)

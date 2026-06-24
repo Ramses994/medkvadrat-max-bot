@@ -49,6 +49,13 @@ func New(path string) (*Storage, error) {
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	CREATE INDEX IF NOT EXISTS idx_user_links_patient ON user_links(patient_id);
+
+	CREATE TABLE IF NOT EXISTS reminder_log (
+		planning_id INTEGER NOT NULL,
+		kind        TEXT    NOT NULL,
+		sent_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (planning_id, kind)
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("создание схемы: %w", err)
@@ -94,5 +101,68 @@ func (s *Storage) Link(userID, patientID int64, phone, fullName string) error {
 // Unlink — на будущее: команда /logout, смена профиля и т.п.
 func (s *Storage) Unlink(userID int64) error {
 	_, err := s.db.Exec(`DELETE FROM user_links WHERE user_id = ?`, userID)
+	return err
+}
+
+// UsersByPatientID returns all MAX users linked to a Medialog patient (family accounts).
+func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
+	if patientID <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT user_id, patient_id, phone, full_name, created_at
+		FROM user_links WHERE patient_id = ?`, patientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []UserLink
+	for rows.Next() {
+		var u UserLink
+		if err := rows.Scan(&u.UserID, &u.PatientID, &u.Phone, &u.FullName, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// DistinctPatientIDs returns all patient_id values from user_links.
+func (s *Storage) DistinctPatientIDs() ([]int64, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links ORDER BY patient_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *Storage) WasReminderSent(planningID int64, kind string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT 1 FROM reminder_log WHERE planning_id = ? AND kind = ? LIMIT 1`,
+		planningID, kind).Scan(&n)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Storage) MarkReminderSent(planningID int64, kind string) error {
+	_, err := s.db.Exec(`
+		INSERT OR IGNORE INTO reminder_log (planning_id, kind) VALUES (?, ?)`,
+		planningID, kind)
 	return err
 }
