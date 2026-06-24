@@ -91,14 +91,14 @@ func TestDueKinds(t *testing.T) {
 }
 
 func TestFormatMessage(t *testing.T) {
-	text := FormatMessage("Каширка", "Гусев П.", msk(2026, time.June, 24, 10, 30))
+	text := FormatMessage(106, "Каширка", "Гусев П.", msk(2026, time.June, 24, 10, 30))
 	if text == "" {
 		t.Fatal("empty message")
 	}
 	if want := "24 июня, 10:30"; !strings.Contains(text, want) {
 		t.Fatalf("missing %q in %q", want, text)
 	}
-	if want := "(Каширка)"; !strings.Contains(text, want) {
+	if want := "📍 Каширка, г. Москва, Каширское шоссе, 74к1"; !strings.Contains(text, want) {
 		t.Fatalf("missing %q in %q", want, text)
 	}
 	if want := "Гусев П."; !strings.Contains(text, want) {
@@ -106,5 +106,12 @@ func TestFormatMessage(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(text), "ответьте 1") || strings.Contains(text, "1/2/3") {
 		t.Fatalf("message must not mention 1/2/3: %q", text)
+	}
+}
+
+func TestFormatMessage_KurkinoAddress(t *testing.T) {
+	text := FormatMessage(3, "Куркино", "Гаевой Э.", msk(2026, time.June, 26, 19, 30))
+	if !strings.Contains(text, "📍 Куркино, г. Москва, ул. Ландышевая, 14к1") {
+		t.Fatalf("missing address in %q", text)
 	}
 }

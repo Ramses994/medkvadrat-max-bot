@@ -72,8 +72,8 @@ type DueReminder struct {
 	PatientPhone     string `json:"patient_phone"`
 	PatientName      string `json:"patient_name"`
 	DoctorName       string `json:"doctor_name"`
-	DepartmentID     int    `json:"department_id"`
-	DepartmentLabel  string `json:"department_label"`
+	BranchID         int    `json:"branch_id"`
+	BranchCode       string `json:"branch_code"`
 	DateConsultation string `json:"date_consultation"`
 	Status           int    `json:"status"`
 }

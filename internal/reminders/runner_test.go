@@ -80,7 +80,8 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 		PlanningID:       11737097,
 		PatientID:        6789,
 		DoctorName:       "Смирнов Иван",
-		DepartmentLabel:  "Каширка",
+		BranchID:         106,
+		BranchCode:       "Каширка",
 		DateConsultation: "2026-06-24 10:30",
 	}
 	gw := &fakeDueGateway{rows: []gateway.DueReminder{row}}
