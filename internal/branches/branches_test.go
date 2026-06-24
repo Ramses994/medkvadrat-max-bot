@@ -2,6 +2,12 @@ package branches
 
 import "testing"
 
+func TestShortLabel_Kurkino(t *testing.T) {
+	if got := ShortLabel(3, "Куркино"); got != "Куркино" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestDisplayLine_Kurkino(t *testing.T) {
 	got := DisplayLine(3, "Куркино")
 	want := "Куркино, г. Москва, ул. Ландышевая, 14к1"

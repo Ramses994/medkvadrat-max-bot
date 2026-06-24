@@ -13,6 +13,14 @@ var ByID = map[int]Branch{
 	106: {Name: "Каширка", Address: "г. Москва, Каширское шоссе, 74к1"},
 }
 
+// ShortLabel returns branch name for compact display (shared with PR #1).
+func ShortLabel(branchID int, branchCode string) string {
+	if b, ok := ByID[branchID]; ok {
+		return b.Name
+	}
+	return branchCode
+}
+
 // DisplayLine returns "Name, Address" for reminder text; falls back to branchCode.
 func DisplayLine(branchID int, branchCode string) string {
 	if b, ok := ByID[branchID]; ok {
