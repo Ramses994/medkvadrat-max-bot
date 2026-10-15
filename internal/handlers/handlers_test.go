@@ -88,6 +88,38 @@ func TestAuthentication_PatientOutsideAllowlistNotLinked(t *testing.T) {
 	}
 }
 
+func TestAuthentication_UnknownPhoneWithAllowlist_SameTestMode(t *testing.T) {
+	gw := &fakeGW{patients: nil}
+	h, st := testHandler(t, []int64{100}, gw)
+	fm := h.max.(*fakeMax)
+
+	if err := h.handleAuthentication(context.Background(), 1, 7, "+79991112233"); err != nil {
+		t.Fatal(err)
+	}
+	if link, _ := st.GetByUserID(7); link != nil {
+		t.Fatal("must not link")
+	}
+	if len(fm.messages) != 1 || fm.messages[0] != botTestModeText {
+		t.Fatalf("messages=%v", fm.messages)
+	}
+}
+
+func TestSendWelcome_OutsideAllowlist_NoFullName(t *testing.T) {
+	h, _ := testHandler(t, []int64{100}, &fakeGW{})
+	st, _ := storage.New(filepath.Join(t.TempDir(), "b.db"))
+	defer st.Close()
+	_ = st.Link(1, 999, "79990000000", "Secret Name")
+	link, _ := st.GetByUserID(1)
+	h.storage = st
+	fm := h.max.(*fakeMax)
+	if err := h.sendWelcome(context.Background(), 1, link); err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.messages) != 1 || fm.messages[0] != botTestModeText {
+		t.Fatalf("messages=%q", fm.messages)
+	}
+}
+
 func TestAuthentication_EmptyAllowlistDeniesLink(t *testing.T) {
 	gw := &fakeGW{patients: []gateway.Patient{{PatientID: 1, FullName: "One"}}}
 	h, st := testHandler(t, nil, gw)

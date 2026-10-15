@@ -135,6 +135,9 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 
 func (h *Handler) sendWelcome(ctx context.Context, chatID int64, link *storage.UserLink) error {
 	if link != nil && link.PatientID != 0 {
+		if !h.LinkAllow.Allowed(link.PatientID) {
+			return h.sendTestMode(ctx, chatID)
+		}
 		return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 			"Здравствуйте, %s!\n"+
 				"Отправьте «Мои анализы», чтобы посмотреть последние результаты.\n"+
@@ -171,7 +174,7 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 	patients := filterAllowedPatients(h.LinkAllow, found)
 	switch len(patients) {
 	case 0:
-		if len(found) > 0 {
+		if len(h.LinkAllow) > 0 {
 			return h.sendTestMode(ctx, chatID)
 		}
 		return h.max.SendMessage(ctx, chatID,
