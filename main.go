@@ -10,6 +10,7 @@ import (
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/config"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/handlers"
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/reminders"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
@@ -28,6 +29,13 @@ func main() {
 	defer store.Close()
 	log.Printf("SQLite инициализирована: %s", cfg.DBPath)
 
+	linkAllow := linkallow.New(cfg.BotLinkAllowlistPatients)
+	if n, err := store.PurgeLinksOutsideAllowlist(linkAllow); err != nil {
+		log.Printf("purge user_links outside allowlist: %v", err)
+	} else if n > 0 {
+		log.Printf("purge user_links outside allowlist: removed %d", n)
+	}
+
 	mc := maxclient.New(cfg.MaxBotToken)
 	gw := gateway.New(cfg.GatewayURL, cfg.GatewayToken)
 
@@ -44,6 +52,7 @@ func main() {
 		me.Name, me.Username, me.UserID)
 
 	h := handlers.New(mc, gw, store)
+	h.LinkAllow = linkAllow
 	h.KeyboardDebug = cfg.KeyboardDebug
 	if cfg.KeyboardDebug {
 		log.Println("KEYBOARD_DEBUG=true: /start и «тест-кнопки» шлют demo-клавиатуру")

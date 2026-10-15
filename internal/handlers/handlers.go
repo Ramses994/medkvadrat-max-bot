@@ -9,25 +9,45 @@ import (
 	"strings"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
 )
 
 const (
-	registryPhone = "+7 (499) 288-88-14"
-	labDaysBack   = 90
-	maxPanelsShow = 5
+	registryPhone   = "+7 (499) 288-88-14"
+	botTestModeText = "Бот пока работает в тестовом режиме. Обратитесь в регистратуру: +7 (499) 288-88-14"
+	labDaysBack     = 90
+	maxPanelsShow   = 5
 )
 
 type Handler struct {
-	max           *maxclient.Client
-	gateway       *gateway.Client
+	max           maxAPI
+	gateway       gatewayAPI
 	storage       *storage.Storage
+	LinkAllow     linkallow.Set
 	KeyboardDebug bool
 }
 
 func New(mc *maxclient.Client, gw *gateway.Client, st *storage.Storage) *Handler {
 	return &Handler{max: mc, gateway: gw, storage: st}
+}
+
+func (h *Handler) sendTestMode(ctx context.Context, chatID int64) error {
+	return h.max.SendMessage(ctx, chatID, botTestModeText)
+}
+
+func filterAllowedPatients(allow linkallow.Set, patients []gateway.Patient) []gateway.Patient {
+	if len(patients) == 0 {
+		return nil
+	}
+	out := make([]gateway.Patient, 0, len(patients))
+	for _, p := range patients {
+		if allow.Allowed(int64(p.PatientID)) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ===== Входные события =====
@@ -115,6 +135,9 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 
 func (h *Handler) sendWelcome(ctx context.Context, chatID int64, link *storage.UserLink) error {
 	if link != nil && link.PatientID != 0 {
+		if !h.LinkAllow.Allowed(link.PatientID) {
+			return h.sendTestMode(ctx, chatID)
+		}
 		return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 			"Здравствуйте, %s!\n"+
 				"Отправьте «Мои анализы», чтобы посмотреть последние результаты.\n"+
@@ -141,15 +164,19 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 				"Пожалуйста, отправьте в формате +79991234567")
 	}
 
-	patients, err := h.gateway.SearchByPhone(ctx, phone)
+	found, err := h.gateway.SearchByPhone(ctx, phone)
 	if err != nil {
-		log.Printf("gateway.SearchByPhone(%s): %v", phone, err)
+		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
 		return h.max.SendMessage(ctx, chatID,
 			"Не удалось связаться с системой клиники. Попробуйте через минуту.")
 	}
 
+	patients := filterAllowedPatients(h.LinkAllow, found)
 	switch len(patients) {
 	case 0:
+		if len(h.LinkAllow) > 0 {
+			return h.sendTestMode(ctx, chatID)
+		}
 		return h.max.SendMessage(ctx, chatID,
 			"Пациент с таким номером не найден.\n"+
 				"Проверьте номер или обратитесь в регистратуру: "+registryPhone)
@@ -158,7 +185,7 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 		if err := h.storage.Link(userID, int64(p.PatientID), phone, p.FullName); err != nil {
 			return fmt.Errorf("storage.Link: %w", err)
 		}
-		log.Printf("идентификация: user=%d → patient=%d (%s)", userID, p.PatientID, p.FullName)
+		log.Printf("идентификация: user=%d patient=%d", userID, p.PatientID)
 		return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 			"Здравствуйте, %s!\n\n"+
 				"Отправьте «Мои анализы», чтобы посмотреть последние результаты.",
@@ -168,17 +195,16 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 		if err := h.storage.Link(userID, 0, phone, "pending_selection"); err != nil {
 			return fmt.Errorf("storage.Link pending: %w", err)
 		}
-		
+
 		var b strings.Builder
 		b.WriteString("По этому номеру зарегистрировано несколько пациентов.\n")
 		b.WriteString("Отправьте цифру, чтобы выбрать, чьи данные вы хотите посмотреть:\n\n")
-		
+
 		for i, p := range patients {
-			// Выводим: 1. Иванов Иван Иванович
 			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, p.FullName))
 		}
 		b.WriteString("\n(Если вы хотите ввести другой номер, напишите «Сменить номер»).")
-		
+
 		return h.max.SendMessage(ctx, chatID, b.String())
 	}
 }
@@ -191,22 +217,29 @@ func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int
 	}
 
 	// Снова запрашиваем список (это надежнее и быстрее, чем хранить массивы в БД)
-	patients, err := h.gateway.SearchByPhone(ctx, phone)
+	found, err := h.gateway.SearchByPhone(ctx, phone)
 	if err != nil {
+		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
 		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
+	}
+	patients := filterAllowedPatients(h.LinkAllow, found)
+	if len(patients) == 0 {
+		return h.sendTestMode(ctx, chatID)
 	}
 
 	if choice > len(patients) {
 		return h.max.SendMessage(ctx, chatID, "Такого номера нет в списке. Пожалуйста, отправьте правильную цифру.")
 	}
 
-	// Пользователь выбрал корректного пациента
 	selected := patients[choice-1]
+	if !h.LinkAllow.Allowed(int64(selected.PatientID)) {
+		return h.sendTestMode(ctx, chatID)
+	}
 	if err := h.storage.Link(userID, int64(selected.PatientID), phone, selected.FullName); err != nil {
 		return fmt.Errorf("storage.Link final: %w", err)
 	}
 
-	log.Printf("идентификация завершена: user=%d выбрал patient=%d (%s)", userID, selected.PatientID, selected.FullName)
+	log.Printf("идентификация завершена: user=%d patient=%d", userID, selected.PatientID)
 	return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 		"Вы успешно авторизовались как %s! ✅\n\n"+
 			"Отправьте «Мои анализы», чтобы посмотреть результаты.\n"+
@@ -230,6 +263,9 @@ func (h *Handler) handleAuthenticated(ctx context.Context, chatID int64, link *s
 }
 
 func (h *Handler) sendLabPanels(ctx context.Context, chatID int64, link *storage.UserLink) error {
+	if !h.LinkAllow.Allowed(link.PatientID) {
+		return h.sendTestMode(ctx, chatID)
+	}
 	panels, err := h.gateway.GetLabPanels(ctx, int(link.PatientID), labDaysBack)
 	if err != nil {
 		log.Printf("gateway.GetLabPanels(patient=%d): %v", link.PatientID, err)
