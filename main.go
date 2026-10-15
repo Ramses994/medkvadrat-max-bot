@@ -10,6 +10,7 @@ import (
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/config"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/handlers"
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/reminders"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
@@ -44,6 +45,7 @@ func main() {
 		me.Name, me.Username, me.UserID)
 
 	h := handlers.New(mc, gw, store)
+	h.LinkAllow = linkallow.New(cfg.BotLinkAllowlistPatients)
 	h.KeyboardDebug = cfg.KeyboardDebug
 	if cfg.KeyboardDebug {
 		log.Println("KEYBOARD_DEBUG=true: /start и «тест-кнопки» шлют demo-клавиатуру")

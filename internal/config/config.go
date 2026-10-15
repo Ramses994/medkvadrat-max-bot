@@ -18,6 +18,7 @@ type Config struct {
 	ReminderEnabled           bool
 	ReminderTick              time.Duration
 	ReminderAllowlistPatients []int64
+	BotLinkAllowlistPatients  []int64
 	KeyboardDebug             bool
 }
 
@@ -51,6 +52,7 @@ func Load() (*Config, error) {
 	}
 	cfg.ReminderTick = tick
 	cfg.ReminderAllowlistPatients = parseCSVInt64s(os.Getenv("REMINDER_ALLOWLIST_PATIENTS"))
+	cfg.BotLinkAllowlistPatients = parseCSVInt64s(os.Getenv("BOT_LINK_ALLOWLIST_PATIENTS"))
 	cfg.KeyboardDebug = envBoolDefaultFalse("KEYBOARD_DEBUG", false)
 
 	return cfg, nil
