@@ -28,7 +28,8 @@ type Runner struct {
 	Gateway   DueGateway
 	Storage   *storage.Storage
 	Messenger Messenger
-	Allowlist []int64
+	Allowlist     []int64
+	LinkAllowlist []int64
 	Now       func() time.Time
 }
 
@@ -50,7 +51,7 @@ func (r *Runner) Tick(ctx context.Context) {
 		log.Printf("reminders: DistinctPatientIDs: %v", err)
 		return
 	}
-	targetPatients := TargetPatients(linked, r.Allowlist)
+	targetPatients := ReminderAudience(linked, r.LinkAllowlist, r.Allowlist)
 	if len(targetPatients) == 0 {
 		return
 	}
@@ -94,7 +95,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		return
 	}
 
-	text := FormatMessage(appt.BranchID, appt.BranchCode, appt.DoctorName, apptTime)
+	text := FormatMessage(appt.BranchID, appt.BranchCode, appt.DoctorName, appt.Specialty, apptTime)
 
 	for _, kind := range kinds {
 		sent, err := r.Storage.WasReminderSent(appt.PlanningID, string(kind))

@@ -49,24 +49,54 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		return answer("Профиль не найден, отправьте номер телефона")
 	}
 
-	if err := h.gateway.PostConfirmation(ctx, planningID, status, link.PatientID); err != nil {
+	answerText := func(status string) string {
+		switch status {
+		case "confirmed":
+			return "Спасибо, ждём вас!"
+		case "declined":
+			return "Спасибо, что предупредили. Регистратура свяжется с вами, чтобы подобрать другое время."
+		case "reschedule":
+			return "Передали в регистратуру — с вами свяжутся для переноса."
+		default:
+			return "Принято"
+		}
+	}
+	label := func(status string) string {
+		switch status {
+		case "confirmed":
+			return "✅ Приду"
+		case "declined":
+			return "❌ Не приду"
+		case "reschedule":
+			return "🔄 Перенести"
+		default:
+			return status
+		}
+	}
+
+	stored, already, err := h.gateway.PostConfirmation(ctx, planningID, status, link.PatientID)
+	if err != nil {
 		log.Printf("POST confirmations planning=%d status=%s patient=%d user=%d: %v",
 			planningID, status, link.PatientID, userID, err)
-		return answer("Не удалось сохранить, попробуйте позже или позвоните в регистратуру.")
+		return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже или позвоните в регистратуру.")
 	}
-	log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d",
-		planningID, status, link.PatientID, userID)
+	if stored == "" {
+		stored = status
+	}
+	note := answerText(stored)
+	if already {
+		note = "Ответ уже получен: " + label(stored)
+		log.Printf("POST confirmations already planning=%d patient=%d user=%d status=%s", planningID, link.PatientID, userID, stored)
+	} else {
+		log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d", planningID, stored, link.PatientID, userID)
+	}
 
-	switch status {
-	case "confirmed":
-		return answer("Спасибо, ждём вас!")
-	case "declined":
-		return answer("Записали, что вы не придёте.")
-	case "reschedule":
-		return answer("Передали в регистратуру — с вами свяжутся для переноса.")
-	default:
-		return answer("Принято")
+	base := ""
+	if u.Message != nil && u.Message.Body != nil {
+		base = u.Message.Body.Text
 	}
+	replaced := base + "\n\nВаш ответ: " + label(stored)
+	return h.max.AnswerCallbackReplace(ctx, callbackID, note, replaced)
 }
 
 func (h *Handler) sendKeyboardSmokeTest(ctx context.Context, userID int64) error {

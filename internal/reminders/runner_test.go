@@ -50,7 +50,7 @@ func TestRunner_Tick_GatewayErrorDoesNotPanic(t *testing.T) {
 	gw := &fakeDueGateway{err: errors.New("gateway down")}
 	msg := &fakeMessenger{}
 
-	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, Now: func() time.Time {
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Now: func() time.Time {
 		return msk(2026, time.June, 21, 10, 30)
 	}}
 
@@ -87,7 +87,7 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	gw := &fakeDueGateway{rows: []gateway.DueReminder{row}}
 	msg := &fakeMessenger{}
 
-	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, Now: func() time.Time { return now }}
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Now: func() time.Time { return now }}
 
 	r.Tick(context.Background())
 	if len(msg.sent) != 1 {
@@ -110,13 +110,16 @@ func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
 	_ = store.Link(42, 6789, "79991234567", "Иванова")
 	_ = store.Link(43, 9999, "79990000000", "Другой")
 
-	gw := &fakeDueGateway{} // gateway returns only allowlisted patients; none due in window
+	_ = store.Link(44, 0, "79990000001", "pending_selection")
+
+	gw := &fakeDueGateway{}
 	msg := &fakeMessenger{}
 	r := &Runner{
 		Gateway:   gw,
 		Storage:   store,
 		Messenger: msg,
-		Allowlist: []int64{6789},
+		Allowlist:     []int64{6789},
+		LinkAllowlist:  []int64{6789},
 		Now:       func() time.Time { return msk(2026, time.June, 23, 10, 30) },
 	}
 	r.Tick(context.Background())

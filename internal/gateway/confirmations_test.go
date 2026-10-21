@@ -27,8 +27,9 @@ func TestPostConfirmation_OK(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "secret-token")
-	if err := c.PostConfirmation(context.Background(), 11737097, "confirmed", 1587578); err != nil {
-		t.Fatal(err)
+	stored, already, err := c.PostConfirmation(context.Background(), 11737097, "confirmed", 1587578)
+	if err != nil || already || stored != "confirmed" {
+		t.Fatalf("stored=%s already=%v err=%v", stored, already, err)
 	}
 	if auth != "Bearer secret-token" {
 		t.Fatalf("auth=%q", auth)
@@ -45,7 +46,7 @@ func TestPostConfirmation_Forbidden(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "confirmed", 2)
+	_, _, err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "confirmed", 2)
 	he, ok := err.(*HTTPError)
 	if !ok || !he.IsForbidden() || he.Code != "PATIENT_MISMATCH" {
 		t.Fatalf("err=%v", err)
@@ -59,7 +60,7 @@ func TestPostConfirmation_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "declined", 2)
+	_, _, err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "declined", 2)
 	he, ok := err.(*HTTPError)
 	if !ok || !he.IsNotFound() {
 		t.Fatalf("got %v", err)

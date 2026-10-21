@@ -56,6 +56,11 @@ func New(path string) (*Storage, error) {
 		sent_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (planning_id, kind)
 	);
+
+	CREATE TABLE IF NOT EXISTS kv (
+		k TEXT PRIMARY KEY,
+		v TEXT NOT NULL
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("создание схемы: %w", err)
@@ -130,7 +135,7 @@ func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 
 // DistinctPatientIDs returns all patient_id values from user_links.
 func (s *Storage) DistinctPatientIDs() ([]int64, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links ORDER BY patient_id`)
+	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links WHERE patient_id > 0 ORDER BY patient_id`)
 	if err != nil {
 		return nil, err
 	}

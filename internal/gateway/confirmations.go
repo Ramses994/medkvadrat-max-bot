@@ -23,7 +23,7 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("gateway %d: %s", e.StatusCode, e.Body)
 }
 
-func (e *HTTPError) IsNotFound() bool   { return e.StatusCode == http.StatusNotFound }
+func (e *HTTPError) IsNotFound() bool { return e.StatusCode == http.StatusNotFound }
 func (e *HTTPError) IsForbidden() bool { return e.StatusCode == http.StatusForbidden }
 
 type confirmationBody struct {
@@ -34,7 +34,8 @@ type confirmationBody struct {
 }
 
 // PostConfirmation records patient response (POST /api/internal/confirmations).
-func (c *Client) PostConfirmation(ctx context.Context, planningID int64, status string, patientID int64) error {
+// already is true when the API returns 409 ALREADY_ANSWERED; stored is the kept status.
+func (c *Client) PostConfirmation(ctx context.Context, planningID int64, status string, patientID int64) (stored string, already bool, err error) {
 	body, err := json.Marshal(confirmationBody{
 		PlanningID: planningID,
 		PatientID:  patientID,
@@ -42,36 +43,41 @@ func (c *Client) PostConfirmation(ctx context.Context, planningID int64, status 
 		Source:     "max",
 	})
 	if err != nil {
-		return err
+		return "", false, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/internal/confirmations", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("HTTP: %w", err)
+		return "", false, fmt.Errorf("HTTP: %w", err)
 	}
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-
-	httpErr := &HTTPError{StatusCode: resp.StatusCode, Body: string(data)}
 	var api apiResponse
-	if err := json.Unmarshal(data, &api); err == nil {
-		if api.ErrorDetails != nil {
-			httpErr.Code = api.ErrorDetails.Code
-		}
-		if api.Error != "" && httpErr.Body == "" {
-			httpErr.Body = api.Error
-		}
+	_ = json.Unmarshal(data, &api)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return status, false, nil
 	}
-	return httpErr
+	httpErr := &HTTPError{StatusCode: resp.StatusCode, Body: string(data)}
+	if api.ErrorDetails != nil {
+		httpErr.Code = api.ErrorDetails.Code
+	}
+	if httpErr.Code == "ALREADY_ANSWERED" {
+		var rec struct {
+			Status string `json:"status"`
+		}
+		_ = json.Unmarshal(api.Data, &rec)
+		if rec.Status == "" {
+			rec.Status = status
+		}
+		return rec.Status, true, nil
+	}
+	return "", false, httpErr
 }

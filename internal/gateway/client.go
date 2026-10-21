@@ -75,7 +75,13 @@ type DueReminder struct {
 	BranchID         int    `json:"branch_id"`
 	BranchCode       string `json:"branch_code"`
 	DateConsultation string `json:"date_consultation"`
+	Specialty        string `json:"specialty"`
 	Status           int    `json:"status"`
+}
+
+type NewBooking struct {
+	DueReminder
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // ===== Методы =====
@@ -124,6 +130,21 @@ func (c *Client) DueReminders(ctx context.Context, from, to time.Time, patientID
 
 	var rows []DueReminder
 	if err := c.get(ctx, "/api/reminders/due?"+q.Encode(), &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (c *Client) NewBookings(ctx context.Context, since time.Time, patientIDs []int64) ([]NewBooking, error) {
+	q := url.Values{}
+	q.Set("since", since.Format(time.RFC3339))
+	parts := make([]string, len(patientIDs))
+	for i, id := range patientIDs {
+		parts[i] = strconv.FormatInt(id, 10)
+	}
+	q.Set("patient_ids", strings.Join(parts, ","))
+	var rows []NewBooking
+	if err := c.get(ctx, "/api/notifications/new-bookings?"+q.Encode(), &rows); err != nil {
 		return nil, err
 	}
 	return rows, nil

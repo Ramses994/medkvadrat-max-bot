@@ -12,6 +12,7 @@ import (
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/handlers"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/notices"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/reminders"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
 )
@@ -30,6 +31,10 @@ func main() {
 	log.Printf("SQLite инициализирована: %s", cfg.DBPath)
 
 	linkAllow := linkallow.New(cfg.BotLinkAllowlistPatients)
+	log.Printf("link allowlist: %d patients", len(linkAllow))
+	if len(linkAllow) == 0 {
+		log.Printf("WARNING: BOT_LINK_ALLOWLIST_PATIENTS is empty — linking disabled for everyone")
+	}
 	if n, err := store.PurgeLinksOutsideAllowlist(linkAllow); err != nil {
 		log.Printf("purge user_links outside allowlist: %v", err)
 	} else if n > 0 {
@@ -63,7 +68,8 @@ func main() {
 			Gateway:   gw,
 			Storage:   store,
 			Messenger: reminders.NewMaxMessenger(mc),
-			Allowlist: cfg.ReminderAllowlistPatients,
+			Allowlist:     cfg.ReminderAllowlistPatients,
+			LinkAllowlist: cfg.BotLinkAllowlistPatients,
 		}
 		go reminders.Start(ctx, cfg.ReminderTick, runner)
 		log.Printf("Планировщик напоминаний запущен (тик %s)", cfg.ReminderTick)
@@ -71,9 +77,29 @@ func main() {
 		log.Println("Планировщик напоминаний отключён (REMINDER_ENABLED=false)")
 	}
 
+	if cfg.BookingNoticeEnabled {
+		if len(cfg.ReminderAllowlistPatients) == 0 {
+			log.Printf("WARNING: BOOKING_NOTICE_ENABLED but REMINDER_ALLOWLIST_PATIENTS is empty — notices disabled")
+		}
+		go notices.Start(ctx, &notices.Runner{
+			Gateway:       gw,
+			Storage:       store,
+			Sender:        textSender{mc},
+			LinkAllow:     cfg.BotLinkAllowlistPatients,
+			ReminderAllow: cfg.ReminderAllowlistPatients,
+		})
+		log.Println("Уведомления о новых записях включены (тик 60s)")
+	}
+
 	log.Println("Long polling запущен. Ctrl+C для остановки.")
 	runLongPolling(ctx, mc, h)
 	log.Println("Остановка завершена")
+}
+
+type textSender struct{ c *maxclient.Client }
+
+func (s textSender) SendText(ctx context.Context, userID int64, text string) error {
+	return s.c.SendToUser(ctx, userID, text)
 }
 
 // runLongPolling — основной цикл.
