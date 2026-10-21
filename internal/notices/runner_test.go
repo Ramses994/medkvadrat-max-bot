@@ -176,3 +176,32 @@ func TestPaginationTwoHundredOne(t *testing.T) {
 		t.Fatalf("calls=%d", gw.calls)
 	}
 }
+
+func TestWaitlistNoticeDropped(t *testing.T) {
+	st, err := storage.New(t.TempDir() + "/b.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_ = st.Link(1, 100, "79990000000", "A")
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
+	cur, _ := storage.EncodeCursor("2026-06-23 10:00:00.000", 0)
+	_ = st.SetKV(storage.BookingNoticeCursorKey, cur)
+	row := consentRow(11, 100)
+	row.IsWaitlist = true
+	row.Service = "Прием терапевта"
+	gw := &fakeGW{pages: []gateway.NewBookingsPage{{
+		Items:      []gateway.NewBooking{row},
+		NextCursor: &gateway.BookingCursor{CreatedAt: row.CreatedAt, PlanningID: row.PlanningID},
+	}}}
+	send := &fakeSend{}
+	r := &Runner{
+		Gateway: gw, Storage: st, Sender: send,
+		LinkAllow: []int64{100}, ReminderAllow: []int64{100},
+		Now: func() time.Time { return now },
+	}
+	r.Tick(context.Background())
+	if send.n != 0 {
+		t.Fatalf("waitlist notice must not send, n=%d", send.n)
+	}
+}

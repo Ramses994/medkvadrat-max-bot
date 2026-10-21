@@ -72,6 +72,7 @@ type DueReminder struct {
 	PatientName      string `json:"patient_name"`
 	DoctorName       string `json:"doctor_name"`
 	Service          string `json:"service"`
+	IsWaitlist       bool   `json:"is_waitlist"`
 	MessengerNotify  *int   `json:"messenger_notify"`
 	NoSMSNotify      bool   `json:"no_sms_notify"`
 	ApptVersion      string `json:"appt_version"`

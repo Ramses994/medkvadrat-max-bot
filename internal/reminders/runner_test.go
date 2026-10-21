@@ -103,6 +103,37 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	}
 }
 
+func TestRunner_Tick_WaitlistSkipped(t *testing.T) {
+	store, err := storage.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Link(42, 6789, "79991234567", "Иванова"); err != nil {
+		t.Fatal(err)
+	}
+	now := msk(2026, time.June, 23, 10, 30)
+	one := 1
+	row := gateway.DueReminder{
+		PlanningID:       11,
+		PatientID:        6789,
+		Service:          "Прием терапевта",
+		IsWaitlist:       true,
+		MessengerNotify:  &one,
+		BranchID:         106,
+		DateConsultation: "2026-06-24 10:30",
+	}
+	msg := &fakeMessenger{}
+	r := &Runner{
+		Gateway: &fakeDueGateway{rows: []gateway.DueReminder{row}}, Storage: store, Messenger: msg,
+		LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time { return now },
+	}
+	r.Tick(context.Background())
+	if len(msg.sent) != 0 {
+		t.Fatalf("waitlist reminder must not send, got %d", len(msg.sent))
+	}
+}
+
 func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
 	store, err := storage.New(":memory:")
 	if err != nil {

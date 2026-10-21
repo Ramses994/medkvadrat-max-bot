@@ -19,6 +19,7 @@ type OutboxItem struct {
 	DateConsultation string
 	MessengerNotify  *int
 	NoSMSNotify      bool
+	IsWaitlist       bool
 	Attempts         int
 	Status           string
 }
@@ -38,14 +39,18 @@ func (s *Storage) EnqueueNoticesAndCursor(items []OutboxItem, cursorJSON string,
 		if it.NoSMSNotify {
 			noSMS = 1
 		}
+		waitlist := 0
+		if it.IsWaitlist {
+			waitlist = 1
+		}
 		_, err := tx.Exec(`
 INSERT INTO notice_outbox (
   planning_id, patient_id, user_id, branch_id, branch_code, doctor_name, service,
-  date_consultation, messenger_notify, no_sms_notify, attempts, next_try_at, status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
+  date_consultation, messenger_notify, no_sms_notify, is_waitlist, attempts, next_try_at, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
 ON CONFLICT(planning_id) DO NOTHING`,
 			it.PlanningID, it.PatientID, it.UserID, it.BranchID, it.BranchCode, it.DoctorName, it.Service,
-			it.DateConsultation, notify, noSMS, now.UTC().Format("2006-01-02 15:04:05"),
+			it.DateConsultation, notify, noSMS, waitlist, now.UTC().Format("2006-01-02 15:04:05"),
 		)
 		if err != nil {
 			return err
@@ -62,7 +67,7 @@ ON CONFLICT(k) DO UPDATE SET v = excluded.v`, BookingNoticeCursorKey, cursorJSON
 func (s *Storage) DueOutbox(now time.Time, limit int) ([]OutboxItem, error) {
 	rows, err := s.db.Query(`
 SELECT planning_id, patient_id, user_id, branch_id, branch_code, doctor_name, service,
-       date_consultation, messenger_notify, no_sms_notify, attempts, status
+       date_consultation, messenger_notify, no_sms_notify, is_waitlist, attempts, status
 FROM notice_outbox
 WHERE status = 'pending' AND next_try_at <= ?
 ORDER BY planning_id
@@ -75,9 +80,9 @@ LIMIT ?`, now.UTC().Format("2006-01-02 15:04:05"), limit)
 	for rows.Next() {
 		var it OutboxItem
 		var notify sql.NullInt64
-		var noSMS int
+		var noSMS, waitlist int
 		if err := rows.Scan(&it.PlanningID, &it.PatientID, &it.UserID, &it.BranchID, &it.BranchCode, &it.DoctorName, &it.Service,
-			&it.DateConsultation, &notify, &noSMS, &it.Attempts, &it.Status); err != nil {
+			&it.DateConsultation, &notify, &noSMS, &waitlist, &it.Attempts, &it.Status); err != nil {
 			return nil, err
 		}
 		if notify.Valid {
@@ -85,6 +90,7 @@ LIMIT ?`, now.UTC().Format("2006-01-02 15:04:05"), limit)
 			it.MessengerNotify = &v
 		}
 		it.NoSMSNotify = noSMS != 0
+		it.IsWaitlist = waitlist != 0
 		out = append(out, it)
 	}
 	return out, rows.Err()

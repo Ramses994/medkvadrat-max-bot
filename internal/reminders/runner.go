@@ -95,7 +95,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		return
 	}
 
-	if !CanNotify(appt.MessengerNotify, appt.NoSMSNotify, appt.Service, false) {
+	if !CanNotify(appt.MessengerNotify, appt.NoSMSNotify, appt.IsWaitlist, false) {
 		log.Printf("skip planning=%d reason=consent", appt.PlanningID)
 		return
 	}

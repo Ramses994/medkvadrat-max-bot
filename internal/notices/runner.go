@@ -97,6 +97,7 @@ func (r *Runner) Tick(ctx context.Context) {
 				DateConsultation: row.DateConsultation,
 				MessengerNotify:  row.MessengerNotify,
 				NoSMSNotify:      row.NoSMSNotify,
+				IsWaitlist:       row.IsWaitlist,
 			})
 		}
 		next := raw
@@ -130,7 +131,7 @@ func (r *Runner) flushOutbox(ctx context.Context, now time.Time) {
 }
 
 func (r *Runner) sendOutbox(ctx context.Context, it *storage.OutboxItem, now time.Time, loc *time.Location) {
-	if !reminders.CanNotify(it.MessengerNotify, it.NoSMSNotify, it.Service, false) {
+	if !reminders.CanNotify(it.MessengerNotify, it.NoSMSNotify, it.IsWaitlist, false) {
 		log.Printf("skip planning=%d reason=consent", it.PlanningID)
 		_ = r.Storage.MarkOutboxDropped(it.PlanningID)
 		return
