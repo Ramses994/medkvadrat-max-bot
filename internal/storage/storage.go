@@ -61,6 +61,23 @@ func New(path string) (*Storage, error) {
 		k TEXT PRIMARY KEY,
 		v TEXT NOT NULL
 	);
+
+	CREATE TABLE IF NOT EXISTS notice_outbox (
+		planning_id INTEGER PRIMARY KEY,
+		patient_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		branch_id INTEGER NOT NULL DEFAULT 0,
+		branch_code TEXT NOT NULL DEFAULT '',
+		doctor_name TEXT NOT NULL DEFAULT '',
+		service TEXT NOT NULL DEFAULT '',
+		date_consultation TEXT NOT NULL DEFAULT '',
+		messenger_notify INTEGER,
+		no_sms_notify INTEGER NOT NULL DEFAULT 0,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_try_at DATETIME NOT NULL,
+		status TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_notice_outbox_pending ON notice_outbox(status, next_try_at);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("создание схемы: %w", err)

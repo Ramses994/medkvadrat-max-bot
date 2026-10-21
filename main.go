@@ -63,6 +63,9 @@ func main() {
 		log.Println("KEYBOARD_DEBUG=true: /start и «тест-кнопки» шлют demo-клавиатуру")
 	}
 
+	if len(cfg.ReminderAllowlistPatients) == 0 {
+		log.Printf("WARNING: REMINDER_ALLOWLIST_PATIENTS is empty — reminders and booking notices disabled for everyone")
+	}
 	if cfg.ReminderEnabled {
 		runner := &reminders.Runner{
 			Gateway:   gw,

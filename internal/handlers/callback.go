@@ -28,7 +28,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		chatID = u.Message.Recipient.ChatID
 	}
 
-	action, planningID, ok := apptconfirm.ParsePayload(cb.Payload)
+	action, planningID, apptVersion, ok := apptconfirm.ParsePayload(cb.Payload)
 	if !ok {
 		log.Printf("message_callback bad payload chat_id=%d user_id=%d payload=%q", chatID, userID, cb.Payload)
 		return answer("Не удалось обработать нажатие")
@@ -74,7 +74,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		}
 	}
 
-	stored, already, err := h.gateway.PostConfirmation(ctx, planningID, status, link.PatientID)
+	stored, already, stale, err := h.gateway.PostConfirmation(ctx, planningID, status, link.PatientID, apptVersion)
 	if err != nil {
 		log.Printf("POST confirmations planning=%d status=%s patient=%d user=%d: %v",
 			planningID, status, link.PatientID, userID, err)
@@ -84,10 +84,14 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		stored = status
 	}
 	note := answerText(stored)
-	if already {
+	switch {
+	case stale:
+		note = "Запись изменилась — ориентируйтесь на новое напоминание или позвоните в регистратуру"
+		log.Printf("POST confirmations stale planning=%d patient=%d user=%d", planningID, link.PatientID, userID)
+	case already:
 		note = "Ответ уже получен: " + label(stored)
 		log.Printf("POST confirmations already planning=%d patient=%d user=%d status=%s", planningID, link.PatientID, userID, stored)
-	} else {
+	default:
 		log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d", planningID, stored, link.PatientID, userID)
 	}
 
@@ -96,7 +100,14 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		base = u.Message.Body.Text
 	}
 	replaced := base + "\n\nВаш ответ: " + label(stored)
-	return h.max.AnswerCallbackReplace(ctx, callbackID, note, replaced)
+	if stale {
+		replaced = base
+	}
+	if err := h.max.AnswerCallbackReplace(ctx, callbackID, note, replaced); err != nil {
+		log.Printf("POST answers replace planning=%d user=%d: %v", planningID, userID, err)
+		return h.max.AnswerCallback(ctx, callbackID, note)
+	}
+	return nil
 }
 
 func (h *Handler) sendKeyboardSmokeTest(ctx context.Context, userID int64) error {

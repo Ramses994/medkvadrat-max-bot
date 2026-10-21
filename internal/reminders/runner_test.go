@@ -31,7 +31,7 @@ type fakeMessenger struct {
 	err  error
 }
 
-func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64) error {
+func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64, apptVersion string) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -50,7 +50,7 @@ func TestRunner_Tick_GatewayErrorDoesNotPanic(t *testing.T) {
 	gw := &fakeDueGateway{err: errors.New("gateway down")}
 	msg := &fakeMessenger{}
 
-	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Now: func() time.Time {
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time {
 		return msk(2026, time.June, 21, 10, 30)
 	}}
 
@@ -76,10 +76,12 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	}
 
 	now := msk(2026, time.June, 23, 10, 30)
+	one := 1
 	row := gateway.DueReminder{
 		PlanningID:       11737097,
 		PatientID:        6789,
 		DoctorName:       "Смирнов Иван",
+		MessengerNotify:  &one,
 		BranchID:         106,
 		BranchCode:       "Каширка",
 		DateConsultation: "2026-06-24 10:30",
@@ -87,7 +89,7 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	gw := &fakeDueGateway{rows: []gateway.DueReminder{row}}
 	msg := &fakeMessenger{}
 
-	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Now: func() time.Time { return now }}
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time { return now }}
 
 	r.Tick(context.Background())
 	if len(msg.sent) != 1 {

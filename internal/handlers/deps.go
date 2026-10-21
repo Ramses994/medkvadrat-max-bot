@@ -17,5 +17,5 @@ type maxAPI interface {
 type gatewayAPI interface {
 	SearchByPhone(ctx context.Context, phone string) ([]gateway.Patient, error)
 	GetLabPanels(ctx context.Context, patientID, daysBack int) ([]gateway.LabPanel, error)
-	PostConfirmation(ctx context.Context, planningID int64, status string, patientID int64) (stored string, already bool, err error)
+	PostConfirmation(ctx context.Context, planningID int64, status string, patientID int64, apptVersion string) (stored string, already, stale bool, err error)
 }

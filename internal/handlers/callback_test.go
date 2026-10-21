@@ -15,8 +15,8 @@ type scriptGW struct {
 	already bool
 }
 
-func (s *scriptGW) PostConfirmation(context.Context, int64, string, int64) (string, bool, error) {
-	return s.stored, s.already, nil
+func (s *scriptGW) PostConfirmation(context.Context, int64, string, int64, string) (string, bool, bool, error) {
+	return s.stored, s.already, false, nil
 }
 
 func TestCallback_ReplacesKeyboard(t *testing.T) {

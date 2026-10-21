@@ -114,7 +114,7 @@ func TestFormatMessage_KurkinoAddress(t *testing.T) {
 	if !strings.Contains(text, "📍 Куркино, г. Москва, ул. Ландышевая, 14к1") {
 		t.Fatalf("missing address in %q", text)
 	}
-	if !strings.Contains(text, "👨‍⚕️ Гаевой Э. — Терапия") {
-		t.Fatalf("missing specialty in %q", text)
+	if !strings.Contains(text, "🩺 Терапия") || !strings.Contains(text, "👨‍⚕️ Гаевой Э.") {
+		t.Fatalf("missing service/doctor lines in %q", text)
 	}
 }

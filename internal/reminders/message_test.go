@@ -6,7 +6,7 @@ import (
 )
 
 func TestConfirmationKeyboard_Payloads(t *testing.T) {
-	rows := ConfirmationKeyboard(11737097)
+	rows := ConfirmationKeyboard(11737097, "")
 	if len(rows) != 2 {
 		t.Fatalf("rows=%d", len(rows))
 	}
@@ -38,9 +38,9 @@ func TestConfirmationKeyboard_Payloads(t *testing.T) {
 
 func TestConfirmationKeyboard_LargeID(t *testing.T) {
 	id := int64(9876543210)
-	rows := ConfirmationKeyboard(id)
+	rows := ConfirmationKeyboard(id, "ver1")
 	payload := rows[0][0].Payload
-	if payload != "confirm:"+strconv.FormatInt(id, 10) {
+	if payload != "confirm:"+strconv.FormatInt(id, 10)+":ver1" {
 		t.Fatalf("payload=%q", payload)
 	}
 }

@@ -52,8 +52,8 @@ func (f *fakeGW) GetLabPanels(context.Context, int, int) ([]gateway.LabPanel, er
 	return f.labPanels, nil
 }
 
-func (f *fakeGW) PostConfirmation(context.Context, int64, string, int64) (string, bool, error) {
-	return "confirmed", false, nil
+func (f *fakeGW) PostConfirmation(context.Context, int64, string, int64, string) (string, bool, bool, error) {
+	return "confirmed", false, false, nil
 }
 
 func testHandler(t *testing.T, allow []int64, gw *fakeGW) (*Handler, *storage.Storage) {

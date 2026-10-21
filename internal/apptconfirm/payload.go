@@ -5,22 +5,27 @@ import (
 	"strings"
 )
 
-// ParsePayload splits "action:planning_id" callback payloads.
-func ParsePayload(payload string) (action string, planningID int64, ok bool) {
+// ParsePayload splits "action:planning_id" or "action:planning_id:appt_version".
+func ParsePayload(payload string) (action string, planningID int64, version string, ok bool) {
 	payload = strings.TrimSpace(payload)
-	i := strings.IndexByte(payload, ':')
-	if i <= 0 || i >= len(payload)-1 {
-		return "", 0, false
+	parts := strings.Split(payload, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return "", 0, "", false
 	}
-	action = strings.ToLower(payload[:i])
-	id, err := strconv.ParseInt(payload[i+1:], 10, 64)
+	action = strings.ToLower(parts[0])
+	if action == "" {
+		return "", 0, "", false
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || id <= 0 {
-		return "", 0, false
+		return "", 0, "", false
 	}
-	return action, id, true
+	if len(parts) == 3 {
+		version = parts[2]
+	}
+	return action, id, version, true
 }
 
-// ActionToStatus maps button action to gateway confirmation status.
 func ActionToStatus(action string) (status string, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case "confirm":

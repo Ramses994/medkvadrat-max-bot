@@ -24,21 +24,16 @@ func TargetPatients(linked, allowlist []int64) []int64 {
 	return out
 }
 
-// ReminderAudience is linked patients ∩ link allowlist ∩ reminder allowlist (if set).
-// An empty link allowlist allows nobody. An empty reminder allowlist does not widen the link allowlist.
+// ReminderAudience is linked ∩ BOT_LINK ∩ REMINDER. Any empty list means nobody.
 func ReminderAudience(linked, linkAllow, reminderAllow []int64) []int64 {
-	out := intersectIDs(linked, linkAllow)
-	if len(reminderAllow) == 0 {
-		return out
-	}
-	return intersectIDs(out, reminderAllow)
-}
-
-// BookingAudience requires both allowlists. An empty reminder allowlist means nobody.
-func BookingAudience(linked, linkAllow, reminderAllow []int64) []int64 {
-	if len(reminderAllow) == 0 {
+	if len(linked) == 0 || len(linkAllow) == 0 || len(reminderAllow) == 0 {
 		return nil
 	}
+	return intersectIDs(intersectIDs(linked, linkAllow), reminderAllow)
+}
+
+// BookingAudience is the same intersection as reminders.
+func BookingAudience(linked, linkAllow, reminderAllow []int64) []int64 {
 	return ReminderAudience(linked, linkAllow, reminderAllow)
 }
 

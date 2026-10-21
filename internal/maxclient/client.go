@@ -227,12 +227,27 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	}
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("MAX API %d: %s", resp.StatusCode, string(data))
+		return fmt.Errorf("MAX API %d", resp.StatusCode)
+	}
+
+	var envelope struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+	}
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &envelope)
+		if envelope.Success != nil && !*envelope.Success {
+			msg := envelope.Message
+			if msg == "" {
+				msg = "unspecified"
+			}
+			return fmt.Errorf("MAX API success=false: %s", msg)
+		}
 	}
 
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("парсинг JSON: %w; body: %s", err, string(data))
+			return fmt.Errorf("парсинг JSON: %w", err)
 		}
 	}
 	return nil
