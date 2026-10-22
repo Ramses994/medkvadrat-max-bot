@@ -3,6 +3,7 @@ package reminders
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/branches"
@@ -27,36 +28,53 @@ var monthsRuGenitive = [...]string{
 	"декабря",
 }
 
-// FormatMessage builds reminder text with branch address (keyboard attached separately in runner).
-func FormatMessage(branchID int, branchCode, doctorName string, appt time.Time) string {
+func appointmentBody(branchID int, branchCode, doctorName, service string, appt time.Time) string {
 	loc := MoscowLocation()
 	t := appt.In(loc)
 	month := monthsRuGenitive[int(t.Month())]
-	dateLine := fmt.Sprintf("📅 %d %s, %02d:%02d", t.Day(), month, t.Hour(), t.Minute())
-	var locationLine string
+	var b strings.Builder
+	fmt.Fprintf(&b, "📅 %d %s, %02d:%02d\n", t.Day(), month, t.Hour(), t.Minute())
 	if locText := branches.DisplayLine(branchID, branchCode); locText != "" {
-		locationLine = "📍 " + locText + "\n"
+		fmt.Fprintf(&b, "📍 %s\n", locText)
 	}
-	doctorLine := "👨‍⚕️ " + doctorName
+	if s := strings.TrimSpace(service); s != "" {
+		fmt.Fprintf(&b, "🩺 %s\n", s)
+	}
+	if d := strings.TrimSpace(doctorName); d != "" {
+		fmt.Fprintf(&b, "👨‍⚕️ %s\n", d)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func FormatMessage(branchID int, branchCode, doctorName, service string, appt time.Time) string {
 	return fmt.Sprintf(
-		"Напоминание о приёме в клинике МедКвадрат.\n\n%s\n%s%s\n\nЕсли планы изменились, свяжитесь с регистратурой: %s",
-		dateLine,
-		locationLine,
-		doctorLine,
+		"Напоминание о приёме в клинике МедКвадрат.\n\n%s\n\nЕсли планы изменились, свяжитесь с регистратурой: %s",
+		appointmentBody(branchID, branchCode, doctorName, service, appt),
 		registryPhone,
 	)
 }
 
-// ConfirmationKeyboard returns inline buttons for appointment confirmation (PR #3b-bot).
-func ConfirmationKeyboard(planningID int64) [][]maxclient.CallbackButton {
+func FormatBookingNotice(branchID int, branchCode, doctorName, service string, appt time.Time) string {
+	return fmt.Sprintf(
+		"Вы записаны на приём в клинике МедКвадрат.\n\n%s\n\nНапомним накануне. Если планы изменятся, позвоните в регистратуру: %s",
+		appointmentBody(branchID, branchCode, doctorName, service, appt),
+		registryPhone,
+	)
+}
+
+func ConfirmationKeyboard(planningID int64, apptVersion string) [][]maxclient.CallbackButton {
 	id := strconv.FormatInt(planningID, 10)
+	suf := id
+	if strings.TrimSpace(apptVersion) != "" {
+		suf = id + ":" + apptVersion
+	}
 	return [][]maxclient.CallbackButton{
 		{
-			{Type: "callback", Text: "✅ Приду", Payload: "confirm:" + id, Intent: "positive"},
-			{Type: "callback", Text: "❌ Не приду", Payload: "decline:" + id, Intent: "negative"},
+			{Type: "callback", Text: "✅ Приду", Payload: "confirm:" + suf, Intent: "positive"},
+			{Type: "callback", Text: "❌ Не приду", Payload: "decline:" + suf, Intent: "negative"},
 		},
 		{
-			{Type: "callback", Text: "🔄 Перенести", Payload: "reschedule:" + id, Intent: "default"},
+			{Type: "callback", Text: "🔄 Перенести", Payload: "reschedule:" + suf, Intent: "default"},
 		},
 	}
 }

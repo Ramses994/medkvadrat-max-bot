@@ -45,5 +45,11 @@ type outboundMessage struct {
 }
 
 type callbackAnswerBody struct {
-	Notification string `json:"notification,omitempty"`
+	Notification string                 `json:"notification,omitempty"`
+	Message      *callbackReplacement   `json:"message,omitempty"`
+}
+
+type callbackReplacement struct {
+	Text        string   `json:"text"`
+	Attachments []struct{} `json:"attachments"`
 }

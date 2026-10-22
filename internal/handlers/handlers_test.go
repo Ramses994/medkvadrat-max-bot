@@ -14,6 +14,7 @@ import (
 
 type fakeMax struct {
 	messages []string
+	replaced string
 }
 
 func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
@@ -22,6 +23,11 @@ func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
 }
 
 func (f *fakeMax) AnswerCallback(context.Context, string, string) error { return nil }
+
+func (f *fakeMax) AnswerCallbackReplace(_ context.Context, _, _, text string) error {
+	f.replaced = text
+	return nil
+}
 
 func (f *fakeMax) SendMessageWithKeyboard(context.Context, int64, bool, string, [][]maxclient.CallbackButton) error {
 	return nil
@@ -46,8 +52,8 @@ func (f *fakeGW) GetLabPanels(context.Context, int, int) ([]gateway.LabPanel, er
 	return f.labPanels, nil
 }
 
-func (f *fakeGW) PostConfirmation(context.Context, int64, string, int64) error {
-	return nil
+func (f *fakeGW) PostConfirmation(context.Context, int64, string, int64, string) (string, bool, bool, error) {
+	return "confirmed", false, false, nil
 }
 
 func testHandler(t *testing.T, allow []int64, gw *fakeGW) (*Handler, *storage.Storage) {
@@ -130,6 +136,10 @@ func TestAuthentication_EmptyAllowlistDeniesLink(t *testing.T) {
 	link, _ := st.GetByUserID(7)
 	if link != nil {
 		t.Fatal("must not link when allowlist empty")
+	}
+	fm := h.max.(*fakeMax)
+	if len(fm.messages) != 1 || fm.messages[0] != botTestModeText {
+		t.Fatalf("messages=%v", fm.messages)
 	}
 }
 

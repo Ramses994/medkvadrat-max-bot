@@ -16,7 +16,7 @@ const d3Lead = 72 * time.Hour
 
 // Messenger sends a reminder to a MAX user (cold delivery by user_id).
 type Messenger interface {
-	SendToUser(ctx context.Context, userID int64, text string, planningID int64) error
+	SendToUser(ctx context.Context, userID int64, text string, planningID int64, apptVersion string) error
 }
 
 // DueGateway fetches upcoming appointments from api-gateway.
@@ -28,7 +28,8 @@ type Runner struct {
 	Gateway   DueGateway
 	Storage   *storage.Storage
 	Messenger Messenger
-	Allowlist []int64
+	Allowlist     []int64
+	LinkAllowlist []int64
 	Now       func() time.Time
 }
 
@@ -50,7 +51,7 @@ func (r *Runner) Tick(ctx context.Context) {
 		log.Printf("reminders: DistinctPatientIDs: %v", err)
 		return
 	}
-	targetPatients := TargetPatients(linked, r.Allowlist)
+	targetPatients := ReminderAudience(linked, r.LinkAllowlist, r.Allowlist)
 	if len(targetPatients) == 0 {
 		return
 	}
@@ -94,7 +95,12 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		return
 	}
 
-	text := FormatMessage(appt.BranchID, appt.BranchCode, appt.DoctorName, apptTime)
+	if !CanNotify(appt.MessengerNotify, appt.NoSMSNotify, appt.IsWaitlist, false) {
+		log.Printf("skip planning=%d reason=consent", appt.PlanningID)
+		return
+	}
+
+	text := FormatMessage(appt.BranchID, appt.BranchCode, appt.DoctorName, appt.Service, apptTime)
 
 	for _, kind := range kinds {
 		sent, err := r.Storage.WasReminderSent(appt.PlanningID, string(kind))
@@ -108,7 +114,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 
 		var delivered bool
 		for _, u := range users {
-			if err := r.Messenger.SendToUser(ctx, u.UserID, text, appt.PlanningID); err != nil {
+			if err := r.Messenger.SendToUser(ctx, u.UserID, text, appt.PlanningID, appt.ApptVersion); err != nil {
 				log.Printf("reminders: send user=%d planning=%d kind=%s: %v", u.UserID, appt.PlanningID, kind, err)
 				continue
 			}
@@ -147,8 +153,8 @@ type maxMessenger struct {
 	c *maxclient.Client
 }
 
-func (m maxMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64) error {
-	rows := ConfirmationKeyboard(planningID)
+func (m maxMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64, apptVersion string) error {
+	rows := ConfirmationKeyboard(planningID, apptVersion)
 	return m.c.SendMessageWithKeyboard(ctx, userID, true, text, rows)
 }
 

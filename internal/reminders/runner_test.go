@@ -31,7 +31,7 @@ type fakeMessenger struct {
 	err  error
 }
 
-func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64) error {
+func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64, apptVersion string) error {
 	if f.err != nil {
 		return f.err
 	}
@@ -50,7 +50,7 @@ func TestRunner_Tick_GatewayErrorDoesNotPanic(t *testing.T) {
 	gw := &fakeDueGateway{err: errors.New("gateway down")}
 	msg := &fakeMessenger{}
 
-	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, Now: func() time.Time {
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time {
 		return msk(2026, time.June, 21, 10, 30)
 	}}
 
@@ -76,10 +76,12 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	}
 
 	now := msk(2026, time.June, 23, 10, 30)
+	one := 1
 	row := gateway.DueReminder{
 		PlanningID:       11737097,
 		PatientID:        6789,
 		DoctorName:       "Смирнов Иван",
+		MessengerNotify:  &one,
 		BranchID:         106,
 		BranchCode:       "Каширка",
 		DateConsultation: "2026-06-24 10:30",
@@ -87,7 +89,7 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	gw := &fakeDueGateway{rows: []gateway.DueReminder{row}}
 	msg := &fakeMessenger{}
 
-	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, Now: func() time.Time { return now }}
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time { return now }}
 
 	r.Tick(context.Background())
 	if len(msg.sent) != 1 {
@@ -101,6 +103,37 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 	}
 }
 
+func TestRunner_Tick_WaitlistSkipped(t *testing.T) {
+	store, err := storage.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Link(42, 6789, "79991234567", "Иванова"); err != nil {
+		t.Fatal(err)
+	}
+	now := msk(2026, time.June, 23, 10, 30)
+	one := 1
+	row := gateway.DueReminder{
+		PlanningID:       11,
+		PatientID:        6789,
+		Service:          "Прием терапевта",
+		IsWaitlist:       true,
+		MessengerNotify:  &one,
+		BranchID:         106,
+		DateConsultation: "2026-06-24 10:30",
+	}
+	msg := &fakeMessenger{}
+	r := &Runner{
+		Gateway: &fakeDueGateway{rows: []gateway.DueReminder{row}}, Storage: store, Messenger: msg,
+		LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time { return now },
+	}
+	r.Tick(context.Background())
+	if len(msg.sent) != 0 {
+		t.Fatalf("waitlist reminder must not send, got %d", len(msg.sent))
+	}
+}
+
 func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
 	store, err := storage.New(":memory:")
 	if err != nil {
@@ -110,13 +143,16 @@ func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
 	_ = store.Link(42, 6789, "79991234567", "Иванова")
 	_ = store.Link(43, 9999, "79990000000", "Другой")
 
-	gw := &fakeDueGateway{} // gateway returns only allowlisted patients; none due in window
+	_ = store.Link(44, 0, "79990000001", "pending_selection")
+
+	gw := &fakeDueGateway{}
 	msg := &fakeMessenger{}
 	r := &Runner{
 		Gateway:   gw,
 		Storage:   store,
 		Messenger: msg,
-		Allowlist: []int64{6789},
+		Allowlist:     []int64{6789},
+		LinkAllowlist:  []int64{6789},
 		Now:       func() time.Time { return msk(2026, time.June, 23, 10, 30) },
 	}
 	r.Tick(context.Background())

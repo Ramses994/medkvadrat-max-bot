@@ -56,10 +56,40 @@ func New(path string) (*Storage, error) {
 		sent_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (planning_id, kind)
 	);
+
+	CREATE TABLE IF NOT EXISTS kv (
+		k TEXT PRIMARY KEY,
+		v TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS notice_outbox (
+		planning_id INTEGER PRIMARY KEY,
+		patient_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		branch_id INTEGER NOT NULL DEFAULT 0,
+		branch_code TEXT NOT NULL DEFAULT '',
+		doctor_name TEXT NOT NULL DEFAULT '',
+		service TEXT NOT NULL DEFAULT '',
+		date_consultation TEXT NOT NULL DEFAULT '',
+		messenger_notify INTEGER,
+		no_sms_notify INTEGER NOT NULL DEFAULT 0,
+		is_waitlist INTEGER NOT NULL DEFAULT 0,
+		appt_version TEXT NOT NULL DEFAULT '',
+		drop_reason TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT '',
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_try_at DATETIME NOT NULL,
+		status TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_notice_outbox_pending ON notice_outbox(status, next_try_at);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN is_waitlist INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN appt_version TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN drop_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN created_at DATETIME NOT NULL DEFAULT ''`)
 
 	return &Storage{db: db}, nil
 }
@@ -104,6 +134,19 @@ func (s *Storage) Unlink(userID int64) error {
 	return err
 }
 
+// IsLinked reports whether this MAX user is currently bound to this patient.
+func (s *Storage) IsLinked(userID, patientID int64) (bool, error) {
+	if userID <= 0 || patientID <= 0 {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM user_links WHERE user_id = ? AND patient_id = ?`, userID, patientID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // UsersByPatientID returns all MAX users linked to a Medialog patient (family accounts).
 func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 	if patientID <= 0 {
@@ -130,7 +173,7 @@ func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 
 // DistinctPatientIDs returns all patient_id values from user_links.
 func (s *Storage) DistinctPatientIDs() ([]int64, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links ORDER BY patient_id`)
+	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links WHERE patient_id > 0 ORDER BY patient_id`)
 	if err != nil {
 		return nil, err
 	}

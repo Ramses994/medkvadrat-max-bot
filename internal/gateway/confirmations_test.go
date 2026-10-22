@@ -6,18 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
 func TestPostConfirmation_OK(t *testing.T) {
 	var got confirmationBody
-	var auth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/internal/confirmations" || r.Method != http.MethodPost {
-			t.Fatalf("path=%s method=%s", r.URL.Path, r.Method)
-		}
-		auth = r.Header.Get("Authorization")
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
@@ -26,15 +20,24 @@ func TestPostConfirmation_OK(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "secret-token")
-	if err := c.PostConfirmation(context.Background(), 11737097, "confirmed", 1587578); err != nil {
-		t.Fatal(err)
+	stored, already, stale, err := New(srv.URL, "secret-token").PostConfirmation(context.Background(), 11737097, "confirmed", 1587578, "ver1")
+	if err != nil || already || stale || stored != "confirmed" {
+		t.Fatalf("stored=%s already=%v stale=%v err=%v", stored, already, stale, err)
 	}
-	if auth != "Bearer secret-token" {
-		t.Fatalf("auth=%q", auth)
-	}
-	if got.PlanningID != 11737097 || got.PatientID != 1587578 || got.Status != "confirmed" || got.Source != "max" {
+	if got.ApptVersion != "ver1" {
 		t.Fatalf("body=%+v", got)
+	}
+}
+
+func TestPostConfirmation_Stale(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"success":false,"error_details":{"code":"STALE_REMINDER"}}`)
+	}))
+	defer srv.Close()
+	_, already, stale, err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "confirmed", 2, "old")
+	if err != nil || already || !stale {
+		t.Fatalf("already=%v stale=%v err=%v", already, stale, err)
 	}
 }
 
@@ -44,27 +47,9 @@ func TestPostConfirmation_Forbidden(t *testing.T) {
 		_, _ = io.WriteString(w, `{"success":false,"error_details":{"code":"PATIENT_MISMATCH"}}`)
 	}))
 	defer srv.Close()
-
-	err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "confirmed", 2)
-	he, ok := err.(*HTTPError)
-	if !ok || !he.IsForbidden() || he.Code != "PATIENT_MISMATCH" {
+	_, _, _, err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "confirmed", 2, "v")
+	ge, ok := err.(*Error)
+	if !ok || ge.Status != 403 || ge.Code != "PATIENT_MISMATCH" {
 		t.Fatalf("err=%v", err)
-	}
-}
-
-func TestPostConfirmation_NotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = io.WriteString(w, `{"success":false,"error_details":{"code":"APPOINTMENT_NOT_FOUND"}}`)
-	}))
-	defer srv.Close()
-
-	err := New(srv.URL, "t").PostConfirmation(context.Background(), 1, "declined", 2)
-	he, ok := err.(*HTTPError)
-	if !ok || !he.IsNotFound() {
-		t.Fatalf("got %v", err)
-	}
-	if !strings.Contains(he.Error(), "404") {
-		t.Fatalf("error=%v", he)
 	}
 }

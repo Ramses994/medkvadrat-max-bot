@@ -172,14 +172,10 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 	}
 
 	patients := filterAllowedPatients(h.LinkAllow, found)
+	log.Printf("link attempt user=%d found=%d allowed=%d", userID, len(found), len(patients))
 	switch len(patients) {
 	case 0:
-		if len(h.LinkAllow) > 0 {
-			return h.sendTestMode(ctx, chatID)
-		}
-		return h.max.SendMessage(ctx, chatID,
-			"Пациент с таким номером не найден.\n"+
-				"Проверьте номер или обратитесь в регистратуру: "+registryPhone)
+		return h.sendTestMode(ctx, chatID)
 	case 1:
 		p := patients[0]
 		if err := h.storage.Link(userID, int64(p.PatientID), phone, p.FullName); err != nil {

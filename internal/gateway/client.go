@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -72,20 +71,43 @@ type DueReminder struct {
 	PatientPhone     string `json:"patient_phone"`
 	PatientName      string `json:"patient_name"`
 	DoctorName       string `json:"doctor_name"`
+	Service          string `json:"service"`
+	IsWaitlist       bool   `json:"is_waitlist"`
+	MessengerNotify  *int   `json:"messenger_notify"`
+	NoSMSNotify      bool   `json:"no_sms_notify"`
+	ApptVersion      string `json:"appt_version"`
 	BranchID         int    `json:"branch_id"`
 	BranchCode       string `json:"branch_code"`
 	DateConsultation string `json:"date_consultation"`
 	Status           int    `json:"status"`
 }
 
+type NewBooking struct {
+	DueReminder
+	CreatedAt string `json:"created_at"`
+}
+
+type BookingSnapshot struct {
+	NewBooking
+	Cancelled bool `json:"cancelled"`
+}
+
+type BookingCursor struct {
+	CreatedAt  string `json:"created_at"`
+	PlanningID int64  `json:"planning_id"`
+}
+
+type NewBookingsPage struct {
+	Items      []NewBooking    `json:"items"`
+	NextCursor *BookingCursor  `json:"next_cursor"`
+	HasMore    bool            `json:"has_more"`
+}
+
 // ===== Методы =====
 
 func (c *Client) SearchByPhone(ctx context.Context, phone string) ([]Patient, error) {
-	q := url.Values{}
-	q.Set("phone", phone)
-
 	var patients []Patient
-	if err := c.get(ctx, "/api/patients/search?"+q.Encode(), &patients); err != nil {
+	if err := c.postJSON(ctx, "search", "/api/patients/search", map[string]string{"phone": phone}, &patients); err != nil {
 		return nil, err
 	}
 	return patients, nil
@@ -129,34 +151,83 @@ func (c *Client) DueReminders(ctx context.Context, from, to time.Time, patientID
 	return rows, nil
 }
 
-func (c *Client) get(ctx context.Context, path string, out interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
+func (c *Client) BookingByPlanningID(ctx context.Context, planningID int64) (BookingSnapshot, error) {
+	var row BookingSnapshot
+	if err := c.get(ctx, "/api/notifications/booking/"+strconv.FormatInt(planningID, 10), &row); err != nil {
+		return BookingSnapshot{}, err
+	}
+	return row, nil
+}
+
+func (c *Client) NewBookings(ctx context.Context, patientIDs []int64, cursor *BookingCursor, limit int) (NewBookingsPage, error) {
+	body := map[string]any{"patient_ids": patientIDs, "limit": limit}
+	if cursor != nil {
+		body["cursor"] = cursor
+	}
+	var page NewBookingsPage
+	if err := c.postJSON(ctx, "new-bookings", "/api/notifications/new-bookings", body, &page); err != nil {
+		return NewBookingsPage{}, err
+	}
+	return page, nil
+}
+
+func (c *Client) postJSON(ctx context.Context, op, path string, payload any, out interface{}) error {
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	// api-gateway ожидает именно "Bearer <token>" (это наш собственный middleware)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, strings.NewReader(string(raw)))
+	if err != nil {
+		return wrapNet(op, err)
+	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+	return c.doJSON(op, req, out)
+}
 
+func (c *Client) get(ctx context.Context, path string, out interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
+	if err != nil {
+		return wrapNet("get", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	return c.doJSON("get", req, out)
+}
+
+func (c *Client) doJSON(op string, req *http.Request, out interface{}) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("HTTP: %w", err)
+		return wrapNet(op, err)
 	}
 	defer resp.Body.Close()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("gateway %d: %s", resp.StatusCode, string(data))
+		code := ""
+		var api apiResponse
+		_ = json.Unmarshal(data, &api)
+		if api.ErrorDetails != nil {
+			code = api.ErrorDetails.Code
+		}
+		return &Error{Op: op, Status: resp.StatusCode, Code: code}
 	}
 
 	var api apiResponse
 	if err := json.Unmarshal(data, &api); err != nil {
-		return fmt.Errorf("парсинг ответа gateway: %w", err)
+		return &Error{Op: op, Err: err}
 	}
 	if !api.Success {
-		return fmt.Errorf("gateway error: %s", api.Error)
+		code := ""
+		if api.ErrorDetails != nil {
+			code = api.ErrorDetails.Code
+		}
+		return &Error{Op: op, Code: code}
 	}
 	if out == nil || len(api.Data) == 0 {
 		return nil
 	}
-	return json.Unmarshal(api.Data, out)
+	if err := json.Unmarshal(api.Data, out); err != nil {
+		return &Error{Op: op, Err: err}
+	}
+	return nil
 }

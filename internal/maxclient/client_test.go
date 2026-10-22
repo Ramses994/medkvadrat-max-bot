@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestAnswerCallbackReplace_EmptyAttachments(t *testing.T) {
+	body, err := json.Marshal(callbackAnswerBody{
+		Notification: "Спасибо",
+		Message: &callbackReplacement{
+			Text:        "текст\n\nВаш ответ: ✅ Приду",
+			Attachments: []struct{}{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"attachments":[]`) {
+		t.Fatalf("body=%s", body)
+	}
+	if strings.Contains(string(body), "inline_keyboard") {
+		t.Fatalf("keyboard leaked: %s", body)
+	}
+}
+
 func TestOutboundMessage_PlainTextOnlyJSON(t *testing.T) {
 	body, err := marshalOutboundBody("Привет!", nil)
 	if err != nil {

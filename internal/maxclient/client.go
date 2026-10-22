@@ -184,6 +184,32 @@ func (c *Client) AnswerCallback(ctx context.Context, callbackID, notification st
 	return c.do(req, nil)
 }
 
+// AnswerCallbackReplace acknowledges a press and replaces the source message without buttons.
+func (c *Client) AnswerCallbackReplace(ctx context.Context, callbackID, notification, text string) error {
+	if callbackID == "" {
+		return fmt.Errorf("callback_id is empty")
+	}
+	body, err := json.Marshal(callbackAnswerBody{
+		Notification: notification,
+		Message: &callbackReplacement{
+			Text:        text,
+			Attachments: []struct{}{},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	q := url.Values{}
+	q.Set("callback_id", callbackID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		apiBase+"/answers?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.do(req, nil)
+}
+
 // do — общий ход: авторизация, запрос, чтение тела, разбор ошибок.
 // ВАЖНО: MAX ждёт заголовок "Authorization: <token>" БЕЗ префикса "Bearer".
 func (c *Client) do(req *http.Request, out interface{}) error {
@@ -201,12 +227,27 @@ func (c *Client) do(req *http.Request, out interface{}) error {
 	}
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("MAX API %d: %s", resp.StatusCode, string(data))
+		return fmt.Errorf("MAX API %d", resp.StatusCode)
+	}
+
+	var envelope struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+	}
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &envelope)
+		if envelope.Success != nil && !*envelope.Success {
+			msg := envelope.Message
+			if msg == "" {
+				msg = "unspecified"
+			}
+			return fmt.Errorf("MAX API success=false: %s", msg)
+		}
 	}
 
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("парсинг JSON: %w; body: %s", err, string(data))
+			return fmt.Errorf("парсинг JSON: %w", err)
 		}
 	}
 	return nil

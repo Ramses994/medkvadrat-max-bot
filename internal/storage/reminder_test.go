@@ -68,4 +68,13 @@ func TestUsersByPatientID(t *testing.T) {
 	if u, err := s.UsersByPatientID(0); err != nil || len(u) != 0 {
 		t.Fatalf("patient_id=0: %v %d", err, len(u))
 	}
+
+	ok, err := s.IsLinked(101, 5001)
+	if err != nil || !ok {
+		t.Fatalf("IsLinked 101: %v %v", ok, err)
+	}
+	ok, err = s.IsLinked(101, 9)
+	if err != nil || ok {
+		t.Fatalf("IsLinked wrong patient: %v %v", ok, err)
+	}
 }

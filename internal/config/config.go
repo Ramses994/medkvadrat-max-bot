@@ -20,6 +20,7 @@ type Config struct {
 	ReminderAllowlistPatients []int64
 	BotLinkAllowlistPatients  []int64
 	KeyboardDebug             bool
+	BookingNoticeEnabled      bool
 }
 
 func Load() (*Config, error) {
@@ -54,6 +55,7 @@ func Load() (*Config, error) {
 	cfg.ReminderAllowlistPatients = parseCSVInt64s(os.Getenv("REMINDER_ALLOWLIST_PATIENTS"))
 	cfg.BotLinkAllowlistPatients = parseCSVInt64s(os.Getenv("BOT_LINK_ALLOWLIST_PATIENTS"))
 	cfg.KeyboardDebug = envBoolDefaultFalse("KEYBOARD_DEBUG", false)
+	cfg.BookingNoticeEnabled = envBoolDefaultFalse("BOOKING_NOTICE_ENABLED", false)
 
 	return cfg, nil
 }
