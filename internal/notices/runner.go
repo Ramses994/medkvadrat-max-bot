@@ -3,6 +3,7 @@ package notices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -22,6 +23,7 @@ const (
 
 type Gateway interface {
 	NewBookings(ctx context.Context, patientIDs []int64, cursor *gateway.BookingCursor, limit int) (gateway.NewBookingsPage, error)
+	BookingByPlanningID(ctx context.Context, planningID int64) (gateway.BookingSnapshot, error)
 }
 
 type Sender interface {
@@ -49,20 +51,24 @@ func (r *Runner) Tick(ctx context.Context) {
 	linked, err := r.Storage.DistinctPatientIDs()
 	if err != nil {
 		log.Printf("booking notice: DistinctPatientIDs: %v", err)
+		r.flushOutbox(ctx, now)
 		return
 	}
 	targets := reminders.BookingAudience(linked, r.LinkAllow, r.ReminderAllow)
 	if len(targets) == 0 {
+		r.flushOutbox(ctx, now)
 		return
 	}
 	if len(targets) > maxAudience {
 		log.Printf("WARNING: booking notice audience %d exceeds 500 — cycle skipped", len(targets))
+		r.flushOutbox(ctx, now)
 		return
 	}
 
 	raw, err := r.Storage.GetKV(storage.BookingNoticeCursorKey)
 	if err != nil {
 		log.Printf("booking notice: read cursor: %v", err)
+		r.flushOutbox(ctx, now)
 		return
 	}
 	if raw == "" {
@@ -70,6 +76,7 @@ func (r *Runner) Tick(ctx context.Context) {
 		if err := r.Storage.SetKV(storage.BookingNoticeCursorKey, cur); err != nil {
 			log.Printf("booking notice: init cursor: %v", err)
 		}
+		r.flushOutbox(ctx, now)
 		return
 	}
 
@@ -78,6 +85,7 @@ func (r *Runner) Tick(ctx context.Context) {
 		page, err := r.Gateway.NewBookings(ctx, targets, cursor, pageLimit)
 		if err != nil {
 			log.Printf("booking notice: gateway: %v", err)
+			r.flushOutbox(ctx, now)
 			return
 		}
 		var items []storage.OutboxItem
@@ -98,6 +106,7 @@ func (r *Runner) Tick(ctx context.Context) {
 				MessengerNotify:  row.MessengerNotify,
 				NoSMSNotify:      row.NoSMSNotify,
 				IsWaitlist:       row.IsWaitlist,
+				ApptVersion:      row.ApptVersion,
 			})
 		}
 		next := raw
@@ -107,6 +116,7 @@ func (r *Runner) Tick(ctx context.Context) {
 		}
 		if err := r.Storage.EnqueueNoticesAndCursor(items, next, now); err != nil {
 			log.Printf("booking notice: outbox: %v", err)
+			r.flushOutbox(ctx, now)
 			return
 		}
 		raw = next
@@ -131,21 +141,21 @@ func (r *Runner) flushOutbox(ctx context.Context, now time.Time) {
 }
 
 func (r *Runner) sendOutbox(ctx context.Context, it *storage.OutboxItem, now time.Time, loc *time.Location) {
-	if !reminders.CanNotify(it.MessengerNotify, it.NoSMSNotify, it.IsWaitlist, false) {
-		log.Printf("skip planning=%d reason=consent", it.PlanningID)
-		_ = r.Storage.MarkOutboxDropped(it.PlanningID)
+	if it.Attempts >= maxAttempts {
+		log.Printf("booking notice dropped planning=%d reason=attempts", it.PlanningID)
+		_ = r.Storage.MarkOutboxDropped(it.PlanningID, "attempts")
 		return
 	}
-	appt, err := time.ParseInLocation(apptLayout, it.DateConsultation, loc)
-	if err != nil {
-		log.Printf("booking notice: parse time planning=%d: %v", it.PlanningID, err)
+	reason, hold := r.outboxRecheck(ctx, it, now, loc)
+	if hold {
 		return
 	}
-	if appt.Sub(now) < minLead || it.Attempts >= maxAttempts {
-		log.Printf("booking notice dropped planning=%d attempts=%d", it.PlanningID, it.Attempts)
-		_ = r.Storage.MarkOutboxDropped(it.PlanningID)
+	if reason != "" {
+		log.Printf("booking notice dropped planning=%d reason=%s", it.PlanningID, reason)
+		_ = r.Storage.MarkOutboxDropped(it.PlanningID, reason)
 		return
 	}
+	appt, _ := time.ParseInLocation(apptLayout, it.DateConsultation, loc)
 	text := reminders.FormatBookingNotice(it.BranchID, it.BranchCode, it.DoctorName, it.Service, appt)
 	if err := r.Sender.SendText(ctx, it.UserID, text); err != nil {
 		next := now.Add(backoff(it.Attempts + 1))
@@ -158,6 +168,50 @@ func (r *Runner) sendOutbox(ctx context.Context, it *storage.OutboxItem, now tim
 		return
 	}
 	log.Printf("booking notice sent planning=%d patient=%d", it.PlanningID, it.PatientID)
+}
+
+func (r *Runner) outboxRecheck(ctx context.Context, it *storage.OutboxItem, now time.Time, loc *time.Location) (reason string, hold bool) {
+	users, err := r.Storage.UsersByPatientID(it.PatientID)
+	if err != nil || len(users) == 0 || users[0].UserID != it.UserID {
+		return "unlinked", false
+	}
+	if len(reminders.BookingAudience([]int64{it.PatientID}, r.LinkAllow, r.ReminderAllow)) == 0 {
+		return "not_allowed", false
+	}
+	live, err := r.Gateway.BookingByPlanningID(ctx, it.PlanningID)
+	if err != nil {
+		var ge *gateway.Error
+		if errors.As(err, &ge) && ge.Status == 404 {
+			return "cancelled", false
+		}
+		log.Printf("booking notice: refresh planning=%d: %v", it.PlanningID, err)
+		return "", true
+	}
+	if live.Cancelled || live.Status != 0 {
+		return "cancelled", false
+	}
+	if live.PatientID != it.PatientID {
+		return "changed", false
+	}
+	if live.ApptVersion != it.ApptVersion {
+		return "changed", false
+	}
+	if !reminders.CanNotify(live.MessengerNotify, live.NoSMSNotify, live.IsWaitlist, false) {
+		return "consent", false
+	}
+	appt, err := time.ParseInLocation(apptLayout, live.DateConsultation, loc)
+	if err != nil {
+		return "changed", false
+	}
+	if appt.Sub(now) < minLead {
+		return "too_late", false
+	}
+	it.BranchID = live.BranchID
+	it.BranchCode = live.BranchCode
+	it.DoctorName = live.DoctorName
+	it.Service = live.Service
+	it.DateConsultation = live.DateConsultation
+	return "", false
 }
 
 func backoff(attempts int) time.Duration {

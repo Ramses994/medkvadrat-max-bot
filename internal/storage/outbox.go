@@ -20,8 +20,10 @@ type OutboxItem struct {
 	MessengerNotify  *int
 	NoSMSNotify      bool
 	IsWaitlist       bool
+	ApptVersion      string
 	Attempts         int
 	Status           string
+	DropReason       string
 }
 
 func (s *Storage) EnqueueNoticesAndCursor(items []OutboxItem, cursorJSON string, now time.Time) error {
@@ -46,11 +48,11 @@ func (s *Storage) EnqueueNoticesAndCursor(items []OutboxItem, cursorJSON string,
 		_, err := tx.Exec(`
 INSERT INTO notice_outbox (
   planning_id, patient_id, user_id, branch_id, branch_code, doctor_name, service,
-  date_consultation, messenger_notify, no_sms_notify, is_waitlist, attempts, next_try_at, status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
+  date_consultation, messenger_notify, no_sms_notify, is_waitlist, appt_version, attempts, next_try_at, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
 ON CONFLICT(planning_id) DO NOTHING`,
 			it.PlanningID, it.PatientID, it.UserID, it.BranchID, it.BranchCode, it.DoctorName, it.Service,
-			it.DateConsultation, notify, noSMS, waitlist, now.UTC().Format("2006-01-02 15:04:05"),
+			it.DateConsultation, notify, noSMS, waitlist, it.ApptVersion, now.UTC().Format("2006-01-02 15:04:05"),
 		)
 		if err != nil {
 			return err
@@ -67,7 +69,7 @@ ON CONFLICT(k) DO UPDATE SET v = excluded.v`, BookingNoticeCursorKey, cursorJSON
 func (s *Storage) DueOutbox(now time.Time, limit int) ([]OutboxItem, error) {
 	rows, err := s.db.Query(`
 SELECT planning_id, patient_id, user_id, branch_id, branch_code, doctor_name, service,
-       date_consultation, messenger_notify, no_sms_notify, is_waitlist, attempts, status
+       date_consultation, messenger_notify, no_sms_notify, is_waitlist, appt_version, attempts, status
 FROM notice_outbox
 WHERE status = 'pending' AND next_try_at <= ?
 ORDER BY planning_id
@@ -82,7 +84,7 @@ LIMIT ?`, now.UTC().Format("2006-01-02 15:04:05"), limit)
 		var notify sql.NullInt64
 		var noSMS, waitlist int
 		if err := rows.Scan(&it.PlanningID, &it.PatientID, &it.UserID, &it.BranchID, &it.BranchCode, &it.DoctorName, &it.Service,
-			&it.DateConsultation, &notify, &noSMS, &waitlist, &it.Attempts, &it.Status); err != nil {
+			&it.DateConsultation, &notify, &noSMS, &waitlist, &it.ApptVersion, &it.Attempts, &it.Status); err != nil {
 			return nil, err
 		}
 		if notify.Valid {
@@ -107,9 +109,15 @@ func (s *Storage) MarkOutboxRetry(planningID int64, attempts int, next time.Time
 	return err
 }
 
-func (s *Storage) MarkOutboxDropped(planningID int64) error {
-	_, err := s.db.Exec(`UPDATE notice_outbox SET status='dropped' WHERE planning_id=?`, planningID)
+func (s *Storage) MarkOutboxDropped(planningID int64, reason string) error {
+	_, err := s.db.Exec(`UPDATE notice_outbox SET status='dropped', drop_reason=? WHERE planning_id=?`, reason, planningID)
 	return err
+}
+
+func (s *Storage) OutboxLookup(planningID int64) (status, reason string, attempts int, err error) {
+	err = s.db.QueryRow(`SELECT status, drop_reason, attempts FROM notice_outbox WHERE planning_id=?`, planningID).
+		Scan(&status, &reason, &attempts)
+	return
 }
 
 func EncodeCursor(createdAt string, planningID int64) (string, error) {

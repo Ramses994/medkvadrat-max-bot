@@ -74,6 +74,8 @@ func New(path string) (*Storage, error) {
 		messenger_notify INTEGER,
 		no_sms_notify INTEGER NOT NULL DEFAULT 0,
 		is_waitlist INTEGER NOT NULL DEFAULT 0,
+		appt_version TEXT NOT NULL DEFAULT '',
+		drop_reason TEXT NOT NULL DEFAULT '',
 		attempts INTEGER NOT NULL DEFAULT 0,
 		next_try_at DATETIME NOT NULL,
 		status TEXT NOT NULL
@@ -84,6 +86,8 @@ func New(path string) (*Storage, error) {
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN is_waitlist INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN appt_version TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN drop_reason TEXT NOT NULL DEFAULT ''`)
 
 	return &Storage{db: db}, nil
 }

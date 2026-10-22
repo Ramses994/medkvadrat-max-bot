@@ -87,6 +87,11 @@ type NewBooking struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type BookingSnapshot struct {
+	NewBooking
+	Cancelled bool `json:"cancelled"`
+}
+
 type BookingCursor struct {
 	CreatedAt  string `json:"created_at"`
 	PlanningID int64  `json:"planning_id"`
@@ -144,6 +149,14 @@ func (c *Client) DueReminders(ctx context.Context, from, to time.Time, patientID
 		return nil, err
 	}
 	return rows, nil
+}
+
+func (c *Client) BookingByPlanningID(ctx context.Context, planningID int64) (BookingSnapshot, error) {
+	var row BookingSnapshot
+	if err := c.get(ctx, "/api/notifications/booking/"+strconv.FormatInt(planningID, 10), &row); err != nil {
+		return BookingSnapshot{}, err
+	}
+	return row, nil
 }
 
 func (c *Client) NewBookings(ctx context.Context, patientIDs []int64, cursor *BookingCursor, limit int) (NewBookingsPage, error) {
