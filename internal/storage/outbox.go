@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,8 @@ type OutboxItem struct {
 	Attempts         int
 	Status           string
 	DropReason       string
+	CreatedAt        time.Time
+	NextTryAt        time.Time
 }
 
 func (s *Storage) EnqueueNoticesAndCursor(items []OutboxItem, cursorJSON string, now time.Time) error {
@@ -48,11 +51,12 @@ func (s *Storage) EnqueueNoticesAndCursor(items []OutboxItem, cursorJSON string,
 		_, err := tx.Exec(`
 INSERT INTO notice_outbox (
   planning_id, patient_id, user_id, branch_id, branch_code, doctor_name, service,
-  date_consultation, messenger_notify, no_sms_notify, is_waitlist, appt_version, attempts, next_try_at, status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
+  date_consultation, messenger_notify, no_sms_notify, is_waitlist, appt_version, created_at, attempts, next_try_at, status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'pending')
 ON CONFLICT(planning_id) DO NOTHING`,
 			it.PlanningID, it.PatientID, it.UserID, it.BranchID, it.BranchCode, it.DoctorName, it.Service,
 			it.DateConsultation, notify, noSMS, waitlist, it.ApptVersion, now.UTC().Format("2006-01-02 15:04:05"),
+			now.UTC().Format("2006-01-02 15:04:05"),
 		)
 		if err != nil {
 			return err
@@ -69,10 +73,10 @@ ON CONFLICT(k) DO UPDATE SET v = excluded.v`, BookingNoticeCursorKey, cursorJSON
 func (s *Storage) DueOutbox(now time.Time, limit int) ([]OutboxItem, error) {
 	rows, err := s.db.Query(`
 SELECT planning_id, patient_id, user_id, branch_id, branch_code, doctor_name, service,
-       date_consultation, messenger_notify, no_sms_notify, is_waitlist, appt_version, attempts, status
+       date_consultation, messenger_notify, no_sms_notify, is_waitlist, appt_version, attempts, status, created_at, next_try_at
 FROM notice_outbox
 WHERE status = 'pending' AND next_try_at <= ?
-ORDER BY planning_id
+ORDER BY next_try_at, planning_id
 LIMIT ?`, now.UTC().Format("2006-01-02 15:04:05"), limit)
 	if err != nil {
 		return nil, err
@@ -83,8 +87,9 @@ LIMIT ?`, now.UTC().Format("2006-01-02 15:04:05"), limit)
 		var it OutboxItem
 		var notify sql.NullInt64
 		var noSMS, waitlist int
+		var createdAt, nextTry string
 		if err := rows.Scan(&it.PlanningID, &it.PatientID, &it.UserID, &it.BranchID, &it.BranchCode, &it.DoctorName, &it.Service,
-			&it.DateConsultation, &notify, &noSMS, &waitlist, &it.ApptVersion, &it.Attempts, &it.Status); err != nil {
+			&it.DateConsultation, &notify, &noSMS, &waitlist, &it.ApptVersion, &it.Attempts, &it.Status, &createdAt, &nextTry); err != nil {
 			return nil, err
 		}
 		if notify.Valid {
@@ -93,6 +98,8 @@ LIMIT ?`, now.UTC().Format("2006-01-02 15:04:05"), limit)
 		}
 		it.NoSMSNotify = noSMS != 0
 		it.IsWaitlist = waitlist != 0
+		it.CreatedAt = parseOutboxTime(createdAt)
+		it.NextTryAt = parseOutboxTime(nextTry)
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -110,8 +117,26 @@ func (s *Storage) MarkOutboxRetry(planningID int64, attempts int, next time.Time
 }
 
 func (s *Storage) MarkOutboxDropped(planningID int64, reason string) error {
-	_, err := s.db.Exec(`UPDATE notice_outbox SET status='dropped', drop_reason=? WHERE planning_id=?`, reason, planningID)
+	return s.MarkOutboxDroppedAttempts(planningID, -1, reason)
+}
+
+func (s *Storage) MarkOutboxDroppedAttempts(planningID int64, attempts int, reason string) error {
+	if attempts < 0 {
+		_, err := s.db.Exec(`UPDATE notice_outbox SET status='dropped', drop_reason=? WHERE planning_id=?`, reason, planningID)
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE notice_outbox SET status='dropped', drop_reason=?, attempts=? WHERE planning_id=?`, reason, attempts, planningID)
 	return err
+}
+
+func parseOutboxTime(s string) time.Time {
+	s = strings.TrimSpace(s)
+	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339} {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func (s *Storage) OutboxLookup(planningID int64) (status, reason string, attempts int, err error) {

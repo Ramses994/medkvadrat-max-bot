@@ -37,6 +37,7 @@ type Runner struct {
 	LinkAllow     []int64
 	ReminderAllow []int64
 	Now           func() time.Time
+	Linked        func(userID, patientID int64) (bool, error)
 }
 
 func (r *Runner) now() time.Time {
@@ -143,11 +144,22 @@ func (r *Runner) flushOutbox(ctx context.Context, now time.Time) {
 func (r *Runner) sendOutbox(ctx context.Context, it *storage.OutboxItem, now time.Time, loc *time.Location) {
 	if it.Attempts >= maxAttempts {
 		log.Printf("booking notice dropped planning=%d reason=attempts", it.PlanningID)
-		_ = r.Storage.MarkOutboxDropped(it.PlanningID, "attempts")
+		_ = r.Storage.MarkOutboxDroppedAttempts(it.PlanningID, it.Attempts, "attempts")
 		return
 	}
-	reason, hold := r.outboxRecheck(ctx, it, now, loc)
-	if hold {
+	if !it.CreatedAt.IsZero() && now.UTC().Sub(it.CreatedAt) >= 24*time.Hour {
+		log.Printf("booking notice dropped planning=%d reason=expired", it.PlanningID)
+		_ = r.Storage.MarkOutboxDropped(it.PlanningID, "expired")
+		return
+	}
+	if appt, err := time.ParseInLocation(apptLayout, it.DateConsultation, loc); err == nil && appt.Sub(now) < minLead {
+		log.Printf("booking notice dropped planning=%d reason=too_late", it.PlanningID)
+		_ = r.Storage.MarkOutboxDropped(it.PlanningID, "too_late")
+		return
+	}
+	reason, retry := r.outboxRecheck(ctx, it, now, loc)
+	if retry {
+		r.failAttempt(it, now)
 		return
 	}
 	if reason != "" {
@@ -158,9 +170,8 @@ func (r *Runner) sendOutbox(ctx context.Context, it *storage.OutboxItem, now tim
 	appt, _ := time.ParseInLocation(apptLayout, it.DateConsultation, loc)
 	text := reminders.FormatBookingNotice(it.BranchID, it.BranchCode, it.DoctorName, it.Service, appt)
 	if err := r.Sender.SendText(ctx, it.UserID, text); err != nil {
-		next := now.Add(backoff(it.Attempts + 1))
 		log.Printf("booking notice: send planning=%d patient=%d: %v", it.PlanningID, it.PatientID, err)
-		_ = r.Storage.MarkOutboxRetry(it.PlanningID, it.Attempts+1, next)
+		r.failAttempt(it, now)
 		return
 	}
 	if err := r.Storage.MarkOutboxSent(it.PlanningID); err != nil {
@@ -170,9 +181,30 @@ func (r *Runner) sendOutbox(ctx context.Context, it *storage.OutboxItem, now tim
 	log.Printf("booking notice sent planning=%d patient=%d", it.PlanningID, it.PatientID)
 }
 
-func (r *Runner) outboxRecheck(ctx context.Context, it *storage.OutboxItem, now time.Time, loc *time.Location) (reason string, hold bool) {
-	users, err := r.Storage.UsersByPatientID(it.PatientID)
-	if err != nil || len(users) == 0 || users[0].UserID != it.UserID {
+func (r *Runner) failAttempt(it *storage.OutboxItem, now time.Time) {
+	n := it.Attempts + 1
+	if n >= maxAttempts {
+		log.Printf("booking notice dropped planning=%d reason=attempts", it.PlanningID)
+		_ = r.Storage.MarkOutboxDroppedAttempts(it.PlanningID, n, "attempts")
+		return
+	}
+	_ = r.Storage.MarkOutboxRetry(it.PlanningID, n, now.Add(backoff(n)))
+}
+
+func (r *Runner) isLinked(userID, patientID int64) (bool, error) {
+	if r.Linked != nil {
+		return r.Linked(userID, patientID)
+	}
+	return r.Storage.IsLinked(userID, patientID)
+}
+
+func (r *Runner) outboxRecheck(ctx context.Context, it *storage.OutboxItem, now time.Time, loc *time.Location) (reason string, retry bool) {
+	ok, err := r.isLinked(it.UserID, it.PatientID)
+	if err != nil {
+		log.Printf("booking notice: IsLinked planning=%d: %v", it.PlanningID, err)
+		return "", true
+	}
+	if !ok {
 		return "unlinked", false
 	}
 	if len(reminders.BookingAudience([]int64{it.PatientID}, r.LinkAllow, r.ReminderAllow)) == 0 {

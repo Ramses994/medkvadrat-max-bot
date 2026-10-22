@@ -17,6 +17,7 @@ type fakeGW struct {
 	pages      []gateway.NewBookingsPage
 	live       map[int64]gateway.BookingSnapshot
 	bookingErr error
+	statusFor  func(planningID int64) int
 }
 
 func (f *fakeGW) NewBookings(_ context.Context, patientIDs []int64, cursor *gateway.BookingCursor, limit int) (gateway.NewBookingsPage, error) {
@@ -42,6 +43,11 @@ func (f *fakeGW) BookingByPlanningID(_ context.Context, planningID int64) (gatew
 	if f.bookingErr != nil {
 		return gateway.BookingSnapshot{}, f.bookingErr
 	}
+	if f.statusFor != nil {
+		if st := f.statusFor(planningID); st >= 500 {
+			return gateway.BookingSnapshot{}, &gateway.Error{Op: "booking", Status: st}
+		}
+	}
 	if f.live != nil {
 		if s, ok := f.live[planningID]; ok {
 			return s, nil
@@ -51,11 +57,13 @@ func (f *fakeGW) BookingByPlanningID(_ context.Context, planningID int64) (gatew
 }
 
 type fakeSend struct {
-	n   int
-	err error
+	n     int
+	tries int
+	err   error
 }
 
 func (f *fakeSend) SendText(context.Context, int64, string) error {
+	f.tries++
 	if f.err != nil {
 		return f.err
 	}
@@ -345,11 +353,12 @@ func TestOutboxEightFailuresDropped(t *testing.T) {
 		r.Now = func() time.Time { return now.Add(time.Duration(i) * time.Hour) }
 		r.Tick(context.Background())
 	}
-	r.Now = func() time.Time { return now.Add(9 * time.Hour) }
-	r.Tick(context.Background())
-	status, _, attempts, err := st.OutboxLookup(60)
-	if err != nil || status != "dropped" || attempts != 8 {
-		t.Fatalf("status=%s attempts=%d err=%v", status, attempts, err)
+	status, reason, attempts, err := st.OutboxLookup(60)
+	if err != nil || status != "dropped" || attempts != 8 || reason != "attempts" {
+		t.Fatalf("status=%s attempts=%d reason=%s err=%v", status, attempts, reason, err)
+	}
+	if send.tries != 8 {
+		t.Fatalf("http tries=%d want 8 (no ninth)", send.tries)
 	}
 	if send.n != 0 {
 		t.Fatal("no successful sends")

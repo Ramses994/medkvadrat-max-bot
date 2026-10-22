@@ -76,6 +76,7 @@ func New(path string) (*Storage, error) {
 		is_waitlist INTEGER NOT NULL DEFAULT 0,
 		appt_version TEXT NOT NULL DEFAULT '',
 		drop_reason TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT '',
 		attempts INTEGER NOT NULL DEFAULT 0,
 		next_try_at DATETIME NOT NULL,
 		status TEXT NOT NULL
@@ -88,6 +89,7 @@ func New(path string) (*Storage, error) {
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN is_waitlist INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN appt_version TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN drop_reason TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN created_at DATETIME NOT NULL DEFAULT ''`)
 
 	return &Storage{db: db}, nil
 }
@@ -130,6 +132,19 @@ func (s *Storage) Link(userID, patientID int64, phone, fullName string) error {
 func (s *Storage) Unlink(userID int64) error {
 	_, err := s.db.Exec(`DELETE FROM user_links WHERE user_id = ?`, userID)
 	return err
+}
+
+// IsLinked reports whether this MAX user is currently bound to this patient.
+func (s *Storage) IsLinked(userID, patientID int64) (bool, error) {
+	if userID <= 0 || patientID <= 0 {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM user_links WHERE user_id = ? AND patient_id = ?`, userID, patientID).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // UsersByPatientID returns all MAX users linked to a Medialog patient (family accounts).
