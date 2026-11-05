@@ -13,8 +13,9 @@ import (
 )
 
 type fakeMax struct {
-	messages []string
-	replaced string
+	messages     []string
+	replaced     string
+	notification string
 }
 
 func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
@@ -24,7 +25,8 @@ func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
 
 func (f *fakeMax) AnswerCallback(context.Context, string, string) error { return nil }
 
-func (f *fakeMax) AnswerCallbackReplace(_ context.Context, _, _, text string) error {
+func (f *fakeMax) AnswerCallbackReplace(_ context.Context, _, notification, text string) error {
+	f.notification = notification
 	f.replaced = text
 	return nil
 }
