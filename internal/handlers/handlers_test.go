@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
@@ -36,10 +37,10 @@ func (f *fakeMax) SendMessageWithKeyboard(context.Context, int64, bool, string, 
 }
 
 type fakeGW struct {
-	patients   []gateway.Patient
-	labCalls   int
-	labPanels  []gateway.LabPanel
-	searchErr  error
+	patients  []gateway.Patient
+	labCalls  int
+	labPanels []gateway.LabPanel
+	searchErr error
 }
 
 func (f *fakeGW) SearchByPhone(context.Context, string) ([]gateway.Patient, error) {
@@ -56,6 +57,142 @@ func (f *fakeGW) GetLabPanels(context.Context, int, int) ([]gateway.LabPanel, er
 
 func (f *fakeGW) PostConfirmation(context.Context, int64, string, int64, string) (string, bool, bool, error) {
 	return "confirmed", false, false, nil
+}
+
+type seqGW struct {
+	lists [][]gateway.Patient
+	n     int
+}
+
+func (s *seqGW) SearchByPhone(context.Context, string) ([]gateway.Patient, error) {
+	i := s.n
+	if i >= len(s.lists) {
+		i = len(s.lists) - 1
+	}
+	s.n++
+	return s.lists[i], nil
+}
+
+func (s *seqGW) GetLabPanels(context.Context, int, int) ([]gateway.LabPanel, error) {
+	return nil, nil
+}
+
+func (s *seqGW) PostConfirmation(context.Context, int64, string, int64, string) (string, bool, bool, error) {
+	return "", false, false, nil
+}
+
+func TestPatientSelection_UsesShownOrderWhenSearchReverses(t *testing.T) {
+	shown := []gateway.Patient{{PatientID: 10, FullName: "Тест Тестовый"}, {PatientID: 20, FullName: "Мартынов Дмитрий"}}
+	gw := &seqGW{lists: [][]gateway.Patient{shown, {{PatientID: 20, FullName: "Мартынов Дмитрий"}, {PatientID: 10, FullName: "Тест Тестовый"}}}}
+	h, st := testHandler(t, []int64{10, 20}, &fakeGW{})
+	h.gateway = gw
+	fm := h.max.(*fakeMax)
+
+	if err := h.handleAuthentication(context.Background(), 1, 42, "+79991112233"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fm.messages[0], "1. Тест Тестовый") || !strings.Contains(fm.messages[0], "2. Мартынов Дмитрий") {
+		t.Fatalf("list=%q", fm.messages[0])
+	}
+	_, ids, ok, err := st.PendingChoice(42, time.Now())
+	if err != nil || !ok || len(ids) != 2 || ids[0] != 10 || ids[1] != 20 {
+		t.Fatalf("saved ids=%v ok=%v err=%v", ids, ok, err)
+	}
+	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "1"); err != nil {
+		t.Fatal(err)
+	}
+	link, err := st.GetByUserID(42)
+	if err != nil || link == nil || link.PatientID != 10 || link.FullName != "Тест Тестовый" {
+		t.Fatalf("link=%+v err=%v", link, err)
+	}
+	if !strings.Contains(fm.messages[len(fm.messages)-1], "Тест Тестовый") || strings.Contains(fm.messages[len(fm.messages)-1], "Мартынов Дмитрий") {
+		t.Fatalf("confirm=%q", fm.messages[len(fm.messages)-1])
+	}
+	if _, _, still, _ := st.PendingChoice(42, time.Now()); still {
+		t.Fatal("pending choice must be deleted after bind")
+	}
+}
+
+func TestPatientSelection_ExpiredRefuses(t *testing.T) {
+	h, st := testHandler(t, []int64{10, 20}, &fakeGW{})
+	h.gateway = &seqGW{lists: [][]gateway.Patient{{{PatientID: 10, FullName: "Тест Тестовый"}, {PatientID: 20, FullName: "Мартынов Дмитрий"}}}}
+	if err := h.handleAuthentication(context.Background(), 1, 42, "+79991112233"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SavePendingChoice(42, "79991112233", []int64{10, 20}, time.Now().Add(-16*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	fm := h.max.(*fakeMax)
+	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fm.messages[len(fm.messages)-1], "Список устарел") {
+		t.Fatalf("msg=%q", fm.messages[len(fm.messages)-1])
+	}
+	link, _ := st.GetByUserID(42)
+	if link != nil && link.PatientID != 0 {
+		t.Fatalf("bound %d", link.PatientID)
+	}
+}
+
+func TestPatientSelection_MissingIDRefuses(t *testing.T) {
+	gw := &seqGW{lists: [][]gateway.Patient{
+		{{PatientID: 20, FullName: "Мартынов Дмитрий"}, {PatientID: 10, FullName: "Тест Тестовый"}},
+		{{PatientID: 20, FullName: "Мартынов Дмитрий"}},
+	}}
+	h, st := testHandler(t, []int64{10, 20}, &fakeGW{})
+	h.gateway = gw
+	if err := h.handleAuthentication(context.Background(), 1, 42, "+79991112233"); err != nil {
+		t.Fatal(err)
+	}
+	fm := h.max.(*fakeMax)
+	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "1"); err != nil {
+		t.Fatal(err)
+	}
+	link, _ := st.GetByUserID(42)
+	if link == nil || link.PatientID != 0 {
+		t.Fatalf("must stay unbound, link=%+v", link)
+	}
+	if strings.Contains(fm.messages[len(fm.messages)-1], "успешно") {
+		t.Fatalf("msg=%q", fm.messages[len(fm.messages)-1])
+	}
+}
+
+func TestPatientSelection_OutOfRangeRefuses(t *testing.T) {
+	h, st := testHandler(t, []int64{10, 20}, &fakeGW{})
+	h.gateway = &seqGW{lists: [][]gateway.Patient{{{PatientID: 10, FullName: "Тест Тестовый"}, {PatientID: 20, FullName: "Мартынов Дмитрий"}}}}
+	if err := h.handleAuthentication(context.Background(), 1, 42, "+79991112233"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "3"); err != nil {
+		t.Fatal(err)
+	}
+	link, _ := st.GetByUserID(42)
+	if link == nil || link.PatientID != 0 {
+		t.Fatalf("must stay unbound, link=%+v", link)
+	}
+}
+
+func TestChangeNumber_DeletesPendingChoice(t *testing.T) {
+	h, st := testHandler(t, []int64{10, 20}, &fakeGW{})
+	h.gateway = &seqGW{lists: [][]gateway.Patient{{{PatientID: 10, FullName: "Тест Тестовый"}, {PatientID: 20, FullName: "Мартынов Дмитрий"}}}}
+	if err := h.handleAuthentication(context.Background(), 1, 42, "+79991112233"); err != nil {
+		t.Fatal(err)
+	}
+	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
+		Sender:    &maxclient.User{UserID: 42},
+		Recipient: &maxclient.Recipient{ChatID: 1},
+		Body:      &maxclient.MessageBody{Text: "Сменить номер"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, _ := st.PendingChoice(42, time.Now()); ok {
+		t.Fatal("pending choice remains")
+	}
+	if link, _ := st.GetByUserID(42); link != nil {
+		t.Fatal("link remains")
+	}
 }
 
 func testHandler(t *testing.T, allow []int64, gw *fakeGW) (*Handler, *storage.Storage) {

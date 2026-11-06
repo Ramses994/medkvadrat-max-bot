@@ -13,10 +13,10 @@ import (
 
 // UserLink — одна запись: MAX-пользователь привязан к пациенту Medialog.
 type UserLink struct {
-	UserID    int64     // user_id из MAX
-	PatientID int64     // PATIENTS_ID из Medialog
-	Phone     string    // нормализованный, например "79991234567"
-	FullName  string    // кэшируем, чтобы приветствовать по имени без лишнего хождения в gateway
+	UserID    int64  // user_id из MAX
+	PatientID int64  // PATIENTS_ID из Medialog
+	Phone     string // нормализованный, например "79991234567"
+	FullName  string // кэшируем, чтобы приветствовать по имени без лишнего хождения в gateway
 	CreatedAt time.Time
 }
 
@@ -82,6 +82,13 @@ func New(path string) (*Storage, error) {
 		status TEXT NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_notice_outbox_pending ON notice_outbox(status, next_try_at);
+
+	CREATE TABLE IF NOT EXISTS pending_choices (
+		user_id INTEGER PRIMARY KEY,
+		phone TEXT NOT NULL,
+		patient_ids TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("создание схемы: %w", err)
