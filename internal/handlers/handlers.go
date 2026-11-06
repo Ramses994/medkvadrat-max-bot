@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
@@ -104,6 +106,10 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 	// ЛОГИКА ОТВЯЗКИ НОМЕРА (работает на любом этапе)
 	lowerText := strings.ToLower(text)
 	if lowerText == "/logout" || lowerText == "сменить номер" || lowerText == "отвязать" {
+		if err := h.storage.DeletePendingChoice(userID); err != nil {
+			log.Printf("pending choice delete user=%d: %v", userID, err)
+			return h.max.SendMessage(ctx, chatID, "Произошла ошибка при отвязке номера. Попробуйте позже.")
+		}
 		if link != nil {
 			if err := h.storage.Unlink(userID); err != nil {
 				log.Printf("ошибка отвязки user=%d: %v", userID, err)
@@ -111,10 +117,10 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 			}
 			log.Printf("пользователь %d отвязал номер", userID)
 		}
-		
-		return h.max.SendMessage(ctx, chatID, 
-			"Ваш профиль успешно отвязан 🔄\n\n" +
-			"Чтобы продолжить работу, отправьте новый номер телефона в формате +79991234567")
+
+		return h.max.SendMessage(ctx, chatID,
+			"Ваш профиль успешно отвязан 🔄\n\n"+
+				"Чтобы продолжить работу, отправьте новый номер телефона в формате +79991234567")
 	}
 
 	// Если нет привязки вообще -> Запускаем поиск по номеру
@@ -181,14 +187,23 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 		if err := h.storage.Link(userID, int64(p.PatientID), phone, p.FullName); err != nil {
 			return fmt.Errorf("storage.Link: %w", err)
 		}
+		_ = h.storage.DeletePendingChoice(userID)
 		log.Printf("идентификация: user=%d patient=%d", userID, p.PatientID)
 		return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 			"Здравствуйте, %s!\n\n"+
 				"Отправьте «Мои анализы», чтобы посмотреть последние результаты.",
 			p.FullName))
 	default:
-		// Сохраняем "режим ожидания выбора" (patient_id = 0)
+		sortPatients(patients)
+		ids := make([]int64, len(patients))
+		for i, p := range patients {
+			ids[i] = int64(p.PatientID)
+		}
+		if err := h.storage.SavePendingChoice(userID, phone, ids, time.Now()); err != nil {
+			return fmt.Errorf("storage.SavePendingChoice: %w", err)
+		}
 		if err := h.storage.Link(userID, 0, phone, "pending_selection"); err != nil {
+			_ = h.storage.DeletePendingChoice(userID)
 			return fmt.Errorf("storage.Link pending: %w", err)
 		}
 
@@ -205,37 +220,54 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 	}
 }
 
+func sortPatients(ps []gateway.Patient) {
+	sort.Slice(ps, func(i, j int) bool { return ps[i].PatientID < ps[j].PatientID })
+}
+
 func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int64, phone, text string) error {
-	// Пытаемся получить число из ответа пользователя
 	choice, err := strconv.Atoi(text)
 	if err != nil || choice < 1 {
 		return h.max.SendMessage(ctx, chatID, "Пожалуйста, отправьте просто цифру из списка (например, 1).")
 	}
 
-	// Снова запрашиваем список (это надежнее и быстрее, чем хранить массивы в БД)
+	savedPhone, ids, ok, err := h.storage.PendingChoice(userID, time.Now())
+	if err != nil {
+		log.Printf("pending choice user=%d: %v", userID, err)
+		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
+	}
+	if !ok || savedPhone != phone {
+		_ = h.storage.Unlink(userID)
+		return h.max.SendMessage(ctx, chatID, "Список устарел, отправьте номер телефона ещё раз")
+	}
+	if choice > len(ids) {
+		return h.max.SendMessage(ctx, chatID, "Такого номера нет в списке. Пожалуйста, отправьте правильную цифру.")
+	}
+	selectedID := ids[choice-1]
+
 	found, err := h.gateway.SearchByPhone(ctx, phone)
 	if err != nil {
 		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
 		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
 	}
-	patients := filterAllowedPatients(h.LinkAllow, found)
-	if len(patients) == 0 {
-		return h.sendTestMode(ctx, chatID)
+	var selected *gateway.Patient
+	for _, p := range filterAllowedPatients(h.LinkAllow, found) {
+		if int64(p.PatientID) == selectedID {
+			cp := p
+			selected = &cp
+			break
+		}
 	}
-
-	if choice > len(patients) {
-		return h.max.SendMessage(ctx, chatID, "Такого номера нет в списке. Пожалуйста, отправьте правильную цифру.")
+	if selected == nil || !h.LinkAllow.Allowed(selectedID) {
+		return h.max.SendMessage(ctx, chatID, "Этот профиль больше недоступен по этому номеру. Отправьте другую цифру или «Сменить номер».")
 	}
-
-	selected := patients[choice-1]
-	if !h.LinkAllow.Allowed(int64(selected.PatientID)) {
-		return h.sendTestMode(ctx, chatID)
-	}
-	if err := h.storage.Link(userID, int64(selected.PatientID), phone, selected.FullName); err != nil {
+	if err := h.storage.Link(userID, selectedID, phone, selected.FullName); err != nil {
 		return fmt.Errorf("storage.Link final: %w", err)
 	}
+	if err := h.storage.DeletePendingChoice(userID); err != nil {
+		return fmt.Errorf("storage.DeletePendingChoice: %w", err)
+	}
 
-	log.Printf("идентификация завершена: user=%d patient=%d", userID, selected.PatientID)
+	log.Printf("идентификация завершена: user=%d patient=%d", userID, selectedID)
 	return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 		"Вы успешно авторизовались как %s! ✅\n\n"+
 			"Отправьте «Мои анализы», чтобы посмотреть результаты.\n"+
