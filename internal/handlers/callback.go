@@ -19,6 +19,23 @@ func callbackChatType(m *maxclient.Message) (string, bool) {
 	return m.Recipient.ChatType, true
 }
 
+func reminderText(m *maxclient.Message) string {
+	if m == nil || m.Body == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Body.Text)
+}
+
+// canReplaceReminder is true only when the original reminder text is present
+// and the chat is a dialog or MAX did not name the chat type.
+func canReplaceReminder(m *maxclient.Message) bool {
+	if reminderText(m) == "" {
+		return false
+	}
+	chatType, present := callbackChatType(m)
+	return !present || chatType == "dialog"
+}
+
 func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) error {
 	if u == nil || u.Callback == nil {
 		return nil
@@ -123,9 +140,9 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d", planningID, stored, link.PatientID, userID)
 	}
 
-	base := ""
-	if u.Message != nil && u.Message.Body != nil {
-		base = u.Message.Body.Text
+	base := reminderText(u.Message)
+	if !canReplaceReminder(u.Message) {
+		return h.max.AnswerCallback(ctx, callbackID, note)
 	}
 	replaced := base + "\n\nВаш ответ: " + label(stored)
 	if stale {

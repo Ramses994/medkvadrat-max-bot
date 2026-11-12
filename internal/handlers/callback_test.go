@@ -144,3 +144,29 @@ func TestCallback_UnverifiedAsksForTheContactButton(t *testing.T) {
 		t.Fatalf("answers=%v", fm.answers)
 	}
 }
+
+func TestCallback_WithoutMessageDoesNotReplaceTheReminder(t *testing.T) {
+	st, err := storage.New(t.TempDir() + "/b.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	fm := &fakeMax{}
+	h := &Handler{max: fm, gateway: &scriptGW{stored: "declined"}, storage: st}
+	u := &maxclient.Update{
+		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
+	}
+	if err := h.OnMessageCallback(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	want := "Спасибо, что предупредили. Мы внесли вас в лист ожидания — регистратура свяжется с вами, чтобы подобрать другое время."
+	if len(fm.answers) != 1 || fm.answers[0] != want {
+		t.Fatalf("answers=%v", fm.answers)
+	}
+	if fm.replaced != "" || fm.notification != "" {
+		t.Fatalf("replaced=%q notification=%q", fm.replaced, fm.notification)
+	}
+}
