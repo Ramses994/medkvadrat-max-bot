@@ -4,16 +4,61 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/apptconfirm"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 )
 
+// callbackChatType reports a chat type only when MAX sent one.
+// A missing message, recipient, or chat_type is not a group chat.
+func callbackChatType(m *maxclient.Message) (string, bool) {
+	if m == nil || m.Recipient == nil || m.Recipient.ChatType == "" {
+		return "", false
+	}
+	return m.Recipient.ChatType, true
+}
+
+func reminderText(m *maxclient.Message) string {
+	if m == nil || m.Body == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.Body.Text)
+}
+
+// canReplaceReminder is true only when the original reminder text is present
+// and the chat is a dialog or MAX did not name the chat type.
+func canReplaceReminder(m *maxclient.Message) bool {
+	if reminderText(m) == "" {
+		return false
+	}
+	chatType, present := callbackChatType(m)
+	return !present || chatType == "dialog"
+}
+
 func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) error {
-	if u.Callback == nil {
+	if u == nil || u.Callback == nil {
+		return nil
+	}
+	if h.KeyboardDebug || h.ContactDebug {
+		log.Printf("message_callback shape %s", maxclient.DescribeUpdate(u))
+	}
+	if chatType, present := callbackChatType(u.Message); present && chatType != "dialog" {
+		shown := chatType
+		if shown == "" {
+			shown = "нет"
+		}
+		log.Printf("message_callback skipped chat_type=%s", shown)
 		return nil
 	}
 	cb := u.Callback
+	if strings.HasPrefix(cb.Payload, "consent:") {
+		var userID int64
+		if cb.User != nil {
+			userID = cb.User.UserID
+		}
+		return h.onConsentCallback(ctx, cb.CallbackID, userID, cb.Payload)
+	}
 	callbackID := cb.CallbackID
 	answer := func(text string) error {
 		return h.max.AnswerCallback(ctx, callbackID, text)
@@ -30,7 +75,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 
 	action, planningID, apptVersion, ok := apptconfirm.ParsePayload(cb.Payload)
 	if !ok {
-		log.Printf("message_callback bad payload chat_id=%d user_id=%d payload=%q", chatID, userID, cb.Payload)
+		log.Printf("message_callback bad payload chat_id=%d user_id=%d", chatID, userID)
 		return answer("Не удалось обработать нажатие")
 	}
 
@@ -45,8 +90,8 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		log.Printf("message_callback storage user_id=%d: %v", userID, err)
 		return answer("Произошла ошибка, попробуйте позже")
 	}
-	if link == nil {
-		return answer("Профиль не найден, отправьте номер телефона")
+	if !link.Verified() {
+		return answer("Подтвердите номер кнопкой „Поделиться контактом“")
 	}
 
 	answerText := func(status string) string {
@@ -95,9 +140,9 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		log.Printf("POST confirmations ok planning=%d status=%s patient=%d user=%d", planningID, stored, link.PatientID, userID)
 	}
 
-	base := ""
-	if u.Message != nil && u.Message.Body != nil {
-		base = u.Message.Body.Text
+	base := reminderText(u.Message)
+	if !canReplaceReminder(u.Message) {
+		return h.max.AnswerCallback(ctx, callbackID, note)
 	}
 	replaced := base + "\n\nВаш ответ: " + label(stored)
 	if stale {

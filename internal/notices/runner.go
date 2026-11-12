@@ -35,6 +35,7 @@ type Runner struct {
 	Storage       *storage.Storage
 	Sender        Sender
 	LinkAllow     []int64
+	LinkAllowAll  bool
 	ReminderAllow []int64
 	Now           func() time.Time
 	Linked        func(userID, patientID int64) (bool, error)
@@ -47,6 +48,13 @@ func (r *Runner) now() time.Time {
 	return time.Now().In(reminders.MoscowLocation())
 }
 
+func (r *Runner) linkAllow(linked []int64) []int64 {
+	if r.LinkAllowAll {
+		return linked
+	}
+	return r.LinkAllow
+}
+
 func (r *Runner) Tick(ctx context.Context) {
 	now := r.now()
 	linked, err := r.Storage.DistinctPatientIDs()
@@ -55,7 +63,7 @@ func (r *Runner) Tick(ctx context.Context) {
 		r.flushOutbox(ctx, now)
 		return
 	}
-	targets := reminders.BookingAudience(linked, r.LinkAllow, r.ReminderAllow)
+	targets := reminders.BookingAudience(linked, r.linkAllow(linked), r.ReminderAllow)
 	if len(targets) == 0 {
 		r.flushOutbox(ctx, now)
 		return
@@ -207,7 +215,7 @@ func (r *Runner) outboxRecheck(ctx context.Context, it *storage.OutboxItem, now 
 	if !ok {
 		return "unlinked", false
 	}
-	if len(reminders.BookingAudience([]int64{it.PatientID}, r.LinkAllow, r.ReminderAllow)) == 0 {
+	if len(reminders.BookingAudience([]int64{it.PatientID}, r.linkAllow([]int64{it.PatientID}), r.ReminderAllow)) == 0 {
 		return "not_allowed", false
 	}
 	live, err := r.Gateway.BookingByPlanningID(ctx, it.PlanningID)
@@ -228,7 +236,7 @@ func (r *Runner) outboxRecheck(ctx context.Context, it *storage.OutboxItem, now 
 	if live.ApptVersion != it.ApptVersion {
 		return "changed", false
 	}
-	if !reminders.CanNotify(live.MessengerNotify, live.NoSMSNotify, live.IsWaitlist, false) {
+	if !reminders.CanNotify(live.MessengerNotify, live.BotConsentService, live.NoSMSNotify, live.IsWaitlist) {
 		return "consent", false
 	}
 	appt, err := time.ParseInLocation(apptLayout, live.DateConsultation, loc)

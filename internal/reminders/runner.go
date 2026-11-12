@@ -22,15 +22,17 @@ type Messenger interface {
 // DueGateway fetches upcoming appointments from api-gateway.
 type DueGateway interface {
 	DueReminders(ctx context.Context, from, to time.Time, patientIDs []int64) ([]gateway.DueReminder, error)
+	BookingByPlanningID(ctx context.Context, planningID int64) (gateway.BookingSnapshot, error)
 }
 
 type Runner struct {
-	Gateway   DueGateway
-	Storage   *storage.Storage
-	Messenger Messenger
+	Gateway       DueGateway
+	Storage       *storage.Storage
+	Messenger     Messenger
 	Allowlist     []int64
 	LinkAllowlist []int64
-	Now       func() time.Time
+	LinkAllowAll  bool
+	Now           func() time.Time
 }
 
 func (r *Runner) now() time.Time {
@@ -51,7 +53,11 @@ func (r *Runner) Tick(ctx context.Context) {
 		log.Printf("reminders: DistinctPatientIDs: %v", err)
 		return
 	}
-	targetPatients := ReminderAudience(linked, r.LinkAllowlist, r.Allowlist)
+	linkAllow := r.LinkAllowlist
+	if r.LinkAllowAll {
+		linkAllow = linked
+	}
+	targetPatients := ReminderAudience(linked, linkAllow, r.Allowlist)
 	if len(targetPatients) == 0 {
 		return
 	}
@@ -95,7 +101,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		return
 	}
 
-	if !CanNotify(appt.MessengerNotify, appt.NoSMSNotify, appt.IsWaitlist, false) {
+	if !CanNotify(appt.MessengerNotify, appt.BotConsentService, appt.NoSMSNotify, appt.IsWaitlist) {
 		log.Printf("skip planning=%d reason=consent", appt.PlanningID)
 		return
 	}
@@ -114,6 +120,24 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 
 		var delivered bool
 		for _, u := range users {
+			linked, err := r.Storage.IsLinked(u.UserID, appt.PatientID)
+			if err != nil {
+				log.Printf("reminders: IsLinked user=%d planning=%d: %v", u.UserID, appt.PlanningID, err)
+				continue
+			}
+			if !linked {
+				continue
+			}
+			live, err := r.Gateway.BookingByPlanningID(ctx, appt.PlanningID)
+			if err != nil {
+				log.Printf("reminders: recheck planning=%d user=%d: %v", appt.PlanningID, u.UserID, err)
+				continue
+			}
+			if live.Cancelled || live.Status != 0 || live.PatientID != appt.PatientID || live.ApptVersion != appt.ApptVersion ||
+				!CanNotify(live.MessengerNotify, live.BotConsentService, live.NoSMSNotify, live.IsWaitlist) {
+				log.Printf("skip planning=%d user=%d reason=recheck", appt.PlanningID, u.UserID)
+				continue
+			}
 			if err := r.Messenger.SendToUser(ctx, u.UserID, text, appt.PlanningID, appt.ApptVersion); err != nil {
 				log.Printf("reminders: send user=%d planning=%d kind=%s: %v", u.UserID, appt.PlanningID, kind, err)
 				continue

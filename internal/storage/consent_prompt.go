@@ -1,0 +1,103 @@
+package storage
+
+import (
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"strings"
+	"time"
+)
+
+const consentPromptTTL = 30 * 24 * time.Hour
+
+// ConsentPrompt is one shown consent screen. It stores no message text.
+type ConsentPrompt struct {
+	Nonce       string
+	UserID      int64
+	PatientID   int64
+	Kind        string
+	TextVersion string
+	CreatedAt   time.Time
+	Revision    int64
+	HasRevision bool
+}
+
+// SaveConsentPrompt records a one-time button for the text version and revision that were shown.
+func (s *Storage) SaveConsentPrompt(userID, patientID int64, kind, version string, revision int64, now time.Time) (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", err
+	}
+	nonce := hex.EncodeToString(buf[:])
+	var stored any = revision
+	if s.omitRevision {
+		stored = nil
+		s.omitRevision = false
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO consent_prompts (nonce, user_id, patient_id, kind, text_version, created_at, revision)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		nonce, userID, patientID, kind, version, now.UTC().Format(time.RFC3339), stored)
+	if err != nil {
+		return "", err
+	}
+	return nonce, nil
+}
+
+// LookupConsentPrompt reads a prompt without using it. used is true when used_at is set.
+func (s *Storage) LookupConsentPrompt(nonce string) (*ConsentPrompt, bool, error) {
+	var p ConsentPrompt
+	var created string
+	var used sql.NullString
+	var revision sql.NullInt64
+	err := s.db.QueryRow(`
+		SELECT nonce, user_id, patient_id, kind, text_version, created_at, used_at, revision
+		FROM consent_prompts WHERE nonce = ?`, nonce).
+		Scan(&p.Nonce, &p.UserID, &p.PatientID, &p.Kind, &p.TextVersion, &created, &used, &revision)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	at, perr := time.Parse(time.RFC3339, created)
+	if perr != nil {
+		return nil, false, nil
+	}
+	p.CreatedAt = at
+	if revision.Valid {
+		p.Revision = revision.Int64
+		p.HasRevision = true
+	}
+	return &p, used.Valid && strings.TrimSpace(used.String) != "", nil
+}
+
+// MarkConsentPromptUsed sets used_at once. The second call returns false.
+func (s *Storage) MarkConsentPromptUsed(nonce string, now time.Time) (bool, error) {
+	res, err := s.db.Exec(`
+		UPDATE consent_prompts SET used_at = ?
+		WHERE nonce = ? AND used_at IS NULL`, now.UTC().Format(time.RFC3339), nonce)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// FailConsentExpiry makes the next expiry return err. Tests use it for a storage that cannot clear buttons.
+func (s *Storage) FailConsentExpiry(err error) { s.expireFail = err }
+
+// OmitNextPromptRevision stores the next screen without a revision, as a row written before this deploy.
+func (s *Storage) OmitNextPromptRevision() { s.omitRevision = true }
+
+// ExpireConsentPrompts invalidates every unused screen of this patient and kind.
+func (s *Storage) ExpireConsentPrompts(patientID int64, kind string, now time.Time) error {
+	if s.expireFail != nil {
+		return s.expireFail
+	}
+	_, err := s.db.Exec(`
+		UPDATE consent_prompts SET used_at = ?
+		WHERE patient_id = ? AND kind = ? AND used_at IS NULL`,
+		now.UTC().Format(time.RFC3339), patientID, kind)
+	return err
+}

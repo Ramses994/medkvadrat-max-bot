@@ -51,9 +51,17 @@ type Recipient struct {
 }
 
 type MessageBody struct {
-	MID  string `json:"mid"`
-	Seq  int64  `json:"seq"`
-	Text string `json:"text"`
+	MID         string       `json:"mid"`
+	Seq         int64        `json:"seq"`
+	Text        string       `json:"text"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment is one MAX message attachment. Payload stays raw so a contact
+// can be inspected without assuming fields the live check has not confirmed.
+type Attachment struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload"`
 }
 
 type Message struct {
@@ -203,6 +211,39 @@ func (c *Client) AnswerCallbackReplace(ctx context.Context, callbackID, notifica
 	q.Set("callback_id", callbackID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		apiBase+"/answers?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.do(req, nil)
+}
+
+const ContactButtonText = "📱 Поделиться контактом"
+
+// SendContactRequest asks the user to share their own MAX contact.
+func (c *Client) SendContactRequest(ctx context.Context, chatID int64, text, button string) error {
+	if button == "" {
+		button = ContactButtonText
+	}
+	body, err := json.Marshal(map[string]any{
+		"text": text,
+		"attachments": []any{
+			map[string]any{
+				"type": "inline_keyboard",
+				"payload": map[string]any{
+					"buttons": []any{
+						[]any{map[string]string{"type": "request_contact", "text": button}},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	q := url.Values{}
+	q.Set("chat_id", strconv.FormatInt(chatID, 10))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+"/messages?"+q.Encode(), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

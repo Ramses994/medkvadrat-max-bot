@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	// Pure-Go SQLite: не требует CGO, собирается в статический бинарник для Alpine.
@@ -13,15 +14,22 @@ import (
 
 // UserLink — одна запись: MAX-пользователь привязан к пациенту Medialog.
 type UserLink struct {
-	UserID    int64  // user_id из MAX
-	PatientID int64  // PATIENTS_ID из Medialog
-	Phone     string // нормализованный, например "79991234567"
-	FullName  string // кэшируем, чтобы приветствовать по имени без лишнего хождения в gateway
-	CreatedAt time.Time
+	UserID     int64  // user_id из MAX
+	PatientID  int64  // PATIENTS_ID из Medialog
+	Phone      string // нормализованный, например "79991234567"
+	FullName   string // кэшируем, чтобы приветствовать по имени без лишнего хождения в gateway
+	CreatedAt  time.Time
+	VerifiedAt string // set only after a MAX contact confirms the phone; empty means unverified
+}
+
+func (u *UserLink) Verified() bool {
+	return u != nil && u.PatientID > 0 && strings.TrimSpace(u.VerifiedAt) != ""
 }
 
 type Storage struct {
-	db *sql.DB
+	db           *sql.DB
+	expireFail   error
+	omitRevision bool
 }
 
 func New(path string) (*Storage, error) {
@@ -87,7 +95,26 @@ func New(path string) (*Storage, error) {
 		user_id INTEGER PRIMARY KEY,
 		phone TEXT NOT NULL,
 		patient_ids TEXT NOT NULL,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		step TEXT NOT NULL DEFAULT 'choose',
+		selected_id INTEGER NOT NULL DEFAULT 0
+	);
+
+	CREATE TABLE IF NOT EXISTS birth_checks (
+		user_id INTEGER PRIMARY KEY,
+		failures INTEGER NOT NULL DEFAULT 0,
+		blocked_until TEXT NOT NULL DEFAULT ''
+	);
+
+	CREATE TABLE IF NOT EXISTS consent_prompts (
+		nonce TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		patient_id INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		text_version TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		used_at TEXT,
+		revision INTEGER
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -97,6 +124,10 @@ func New(path string) (*Storage, error) {
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN appt_version TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN drop_reason TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN created_at DATETIME NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE user_links ADD COLUMN verified_at TEXT`)
+	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN step TEXT NOT NULL DEFAULT 'choose'`)
+	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN selected_id INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE consent_prompts ADD COLUMN revision INTEGER`)
 
 	return &Storage{db: db}, nil
 }
@@ -108,11 +139,15 @@ func (s *Storage) Close() error {
 // GetByUserID — вернёт nil, nil если связки нет (важно: не ошибка).
 func (s *Storage) GetByUserID(userID int64) (*UserLink, error) {
 	row := s.db.QueryRow(`
-		SELECT user_id, patient_id, phone, full_name, created_at
+		SELECT user_id, patient_id, phone, full_name, created_at, verified_at
 		FROM user_links WHERE user_id = ?`, userID)
 
 	var u UserLink
-	err := row.Scan(&u.UserID, &u.PatientID, &u.Phone, &u.FullName, &u.CreatedAt)
+	var verified sql.NullString
+	err := row.Scan(&u.UserID, &u.PatientID, &u.Phone, &u.FullName, &u.CreatedAt, &verified)
+	if err == nil && verified.Valid {
+		u.VerifiedAt = verified.String
+	}
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -124,15 +159,35 @@ func (s *Storage) GetByUserID(userID int64) (*UserLink, error) {
 
 // Link — upsert: при повторной привязке того же user_id перезаписываем.
 func (s *Storage) Link(userID, patientID int64, phone, fullName string) error {
+	return s.link(userID, patientID, phone, fullName, "")
+}
+
+// LinkVerified records a phone confirmed by a MAX contact.
+func (s *Storage) LinkVerified(userID, patientID int64, phone, fullName string, at time.Time) error {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return s.link(userID, patientID, phone, fullName, at.UTC().Format(time.RFC3339))
+}
+
+func (s *Storage) link(userID, patientID int64, phone, fullName, verifiedAt string) error {
 	_, err := s.db.Exec(`
-		INSERT INTO user_links (user_id, patient_id, phone, full_name)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO user_links (user_id, patient_id, phone, full_name, verified_at)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			patient_id = excluded.patient_id,
 			phone = excluded.phone,
-			full_name = excluded.full_name`,
-		userID, patientID, phone, fullName)
+			full_name = excluded.full_name,
+			verified_at = excluded.verified_at`,
+		userID, patientID, phone, fullName, nullIfEmpty(verifiedAt))
 	return err
+}
+
+func nullIfEmpty(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
 }
 
 // Unlink — на будущее: команда /logout, смена профиля и т.п.
@@ -147,7 +202,7 @@ func (s *Storage) IsLinked(userID, patientID int64) (bool, error) {
 		return false, nil
 	}
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(1) FROM user_links WHERE user_id = ? AND patient_id = ?`, userID, patientID).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM user_links WHERE user_id = ? AND patient_id = ? AND verified_at IS NOT NULL AND verified_at != ''`, userID, patientID).Scan(&n)
 	if err != nil {
 		return false, err
 	}
@@ -160,8 +215,8 @@ func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 		return nil, nil
 	}
 	rows, err := s.db.Query(`
-		SELECT user_id, patient_id, phone, full_name, created_at
-		FROM user_links WHERE patient_id = ?`, patientID)
+		SELECT user_id, patient_id, phone, full_name, created_at, verified_at
+		FROM user_links WHERE patient_id = ? AND verified_at IS NOT NULL AND verified_at != ''`, patientID)
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +225,12 @@ func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 	var out []UserLink
 	for rows.Next() {
 		var u UserLink
-		if err := rows.Scan(&u.UserID, &u.PatientID, &u.Phone, &u.FullName, &u.CreatedAt); err != nil {
+		var verified sql.NullString
+		if err := rows.Scan(&u.UserID, &u.PatientID, &u.Phone, &u.FullName, &u.CreatedAt, &verified); err != nil {
 			return nil, err
+		}
+		if verified.Valid {
+			u.VerifiedAt = verified.String
 		}
 		out = append(out, u)
 	}
@@ -180,7 +239,7 @@ func (s *Storage) UsersByPatientID(patientID int64) ([]UserLink, error) {
 
 // DistinctPatientIDs returns all patient_id values from user_links.
 func (s *Storage) DistinctPatientIDs() ([]int64, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links WHERE patient_id > 0 ORDER BY patient_id`)
+	rows, err := s.db.Query(`SELECT DISTINCT patient_id FROM user_links WHERE patient_id > 0 AND verified_at IS NOT NULL AND verified_at != '' ORDER BY patient_id`)
 	if err != nil {
 		return nil, err
 	}

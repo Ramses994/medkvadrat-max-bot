@@ -10,16 +10,20 @@ import (
 // PurgeLinksOutsideAllowlist removes user_links not on the allowlist (including pending_selection).
 // Returns the number of deleted rows.
 func (s *Storage) PurgeLinksOutsideAllowlist(allow linkallow.Set) (int64, error) {
-	if len(allow) == 0 {
+	if allow.All() {
+		return 0, nil
+	}
+	if allow.Empty() {
 		res, err := s.db.Exec(`DELETE FROM user_links`)
 		if err != nil {
 			return 0, err
 		}
 		return res.RowsAffected()
 	}
-	ids := make([]string, 0, len(allow))
-	args := make([]any, 0, len(allow))
-	for id := range allow {
+	allowed := allow.IDs()
+	ids := make([]string, 0, len(allowed))
+	args := make([]any, 0, len(allowed))
+	for _, id := range allowed {
 		ids = append(ids, "?")
 		args = append(args, id)
 	}

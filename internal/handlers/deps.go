@@ -12,6 +12,7 @@ type maxAPI interface {
 	AnswerCallback(ctx context.Context, callbackID, text string) error
 	AnswerCallbackReplace(ctx context.Context, callbackID, notification, text string) error
 	SendMessageWithKeyboard(ctx context.Context, userID int64, cold bool, text string, rows [][]maxclient.CallbackButton) error
+	SendContactRequest(ctx context.Context, chatID int64, text, button string) error
 }
 
 type gatewayAPI interface {

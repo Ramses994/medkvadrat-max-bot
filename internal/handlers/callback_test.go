@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
@@ -26,14 +27,14 @@ func TestCallback_ReplacesKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.Link(7, 1, "79990000000", "N"); err != nil {
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fm := &fakeMax{}
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "declined"}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -56,14 +57,14 @@ func TestCallback_RescheduleWaitlistText(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.Link(7, 1, "79990000000", "N"); err != nil {
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fm := &fakeMax{}
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "reschedule"}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "reschedule:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -83,14 +84,14 @@ func TestCallback_StaleReminderKeepsF5Text(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.Link(7, 1, "79990000000", "N"); err != nil {
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fm := &fakeMax{}
 	h := &Handler{max: fm, gateway: &scriptGW{stale: true}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -109,17 +110,63 @@ func TestCallback_AlreadyAnsweredStillClearsKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(7, 1, "79990000000", "N")
+	_ = st.LinkVerified(7, 1, "79990000000", "N", time.Now())
 	fm := &fakeMax{}
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "confirmed", already: true}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(fm.replaced, "✅ Приду") {
 		t.Fatalf("replaced=%q", fm.replaced)
+	}
+}
+
+func TestCallback_UnverifiedAsksForTheContactButton(t *testing.T) {
+	st, err := storage.New(t.TempDir() + "/b.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fm := &fakeMax{}
+	h := &Handler{max: fm, gateway: &scriptGW{}, storage: st}
+	u := &maxclient.Update{
+		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}},
+	}
+	if err := h.OnMessageCallback(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.answers) != 1 || fm.answers[0] != "Подтвердите номер кнопкой „Поделиться контактом“" {
+		t.Fatalf("answers=%v", fm.answers)
+	}
+}
+
+func TestCallback_WithoutMessageDoesNotReplaceTheReminder(t *testing.T) {
+	st, err := storage.New(t.TempDir() + "/b.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	fm := &fakeMax{}
+	h := &Handler{max: fm, gateway: &scriptGW{stored: "declined"}, storage: st}
+	u := &maxclient.Update{
+		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
+	}
+	if err := h.OnMessageCallback(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	want := "Спасибо, что предупредили. Мы внесли вас в лист ожидания — регистратура свяжется с вами, чтобы подобрать другое время."
+	if len(fm.answers) != 1 || fm.answers[0] != want {
+		t.Fatalf("answers=%v", fm.answers)
+	}
+	if fm.replaced != "" || fm.notification != "" {
+		t.Fatalf("replaced=%q notification=%q", fm.replaced, fm.notification)
 	}
 }
