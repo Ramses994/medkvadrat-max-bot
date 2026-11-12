@@ -25,6 +25,7 @@ type keyboardSend struct {
 	recipient int64
 	byUser    bool
 	text      string
+	rows      [][]maxclient.CallbackButton
 }
 
 func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
@@ -43,9 +44,9 @@ func (f *fakeMax) AnswerCallbackReplace(_ context.Context, _, notification, text
 	return nil
 }
 
-func (f *fakeMax) SendMessageWithKeyboard(_ context.Context, recipient int64, byUser bool, text string, _ [][]maxclient.CallbackButton) error {
+func (f *fakeMax) SendMessageWithKeyboard(_ context.Context, recipient int64, byUser bool, text string, rows [][]maxclient.CallbackButton) error {
 	f.messages = append(f.messages, text)
-	f.keyboards = append(f.keyboards, keyboardSend{recipient: recipient, byUser: byUser, text: text})
+	f.keyboards = append(f.keyboards, keyboardSend{recipient: recipient, byUser: byUser, text: text, rows: rows})
 	return nil
 }
 
@@ -55,13 +56,15 @@ func (f *fakeMax) SendContactRequest(_ context.Context, _ int64, text, _ string)
 }
 
 type fakeGW struct {
-	patients  []gateway.Patient
-	labCalls  int
-	labPanels []gateway.LabPanel
-	searchErr error
+	patients    []gateway.Patient
+	labCalls    int
+	searchCalls int
+	labPanels   []gateway.LabPanel
+	searchErr   error
 }
 
 func (f *fakeGW) SearchByPhone(context.Context, string) ([]gateway.Patient, error) {
+	f.searchCalls++
 	if f.searchErr != nil {
 		return nil, f.searchErr
 	}
@@ -112,11 +115,17 @@ func TestPatientSelection_UsesShownOrderWhenSearchReverses(t *testing.T) {
 	if !strings.Contains(fm.messages[0], "1. Т. Т., 1985") || !strings.Contains(fm.messages[0], "2. М. Д., 1980") || strings.Contains(fm.messages[0], "Тест Тестовый") || strings.Contains(fm.messages[0], "Мартынов Дмитрий") {
 		t.Fatalf("list=%q", fm.messages[0])
 	}
-	_, ids, ok, err := st.PendingChoice(42, time.Now())
+	_, ids, _, _, ok, err := st.PendingChoice(42, time.Now())
 	if err != nil || !ok || len(ids) != 2 || ids[0] != 10 || ids[1] != 20 {
 		t.Fatalf("saved ids=%v ok=%v err=%v", ids, ok, err)
 	}
 	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(fm.messages[len(fm.messages)-1], "ДД.ММ.ГГГГ") {
+		t.Fatalf("ask=%q", fm.messages[len(fm.messages)-1])
+	}
+	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "01.01.1985"); err != nil {
 		t.Fatal(err)
 	}
 	link, err := st.GetByUserID(42)
@@ -126,7 +135,7 @@ func TestPatientSelection_UsesShownOrderWhenSearchReverses(t *testing.T) {
 	if !strings.Contains(fm.messages[len(fm.messages)-1], "Тест Тестовый") || strings.Contains(fm.messages[len(fm.messages)-1], "Мартынов Дмитрий") {
 		t.Fatalf("confirm=%q", fm.messages[len(fm.messages)-1])
 	}
-	if _, _, still, _ := st.PendingChoice(42, time.Now()); still {
+	if _, _, _, _, still, _ := st.PendingChoice(42, time.Now()); still {
 		t.Fatal("pending choice must be deleted after bind")
 	}
 }
@@ -167,6 +176,9 @@ func TestPatientSelection_MissingIDRefuses(t *testing.T) {
 	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := h.handlePatientSelection(context.Background(), 1, 42, "79991112233", "01.01.1985"); err != nil {
+		t.Fatal(err)
+	}
 	link, _ := st.GetByUserID(42)
 	if link == nil || link.PatientID != 0 {
 		t.Fatalf("must stay unbound, link=%+v", link)
@@ -199,19 +211,21 @@ func TestChangeNumber_DeletesPendingChoice(t *testing.T) {
 	}
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
 		Sender:    &maxclient.User{UserID: 42},
-		Recipient: &maxclient.Recipient{ChatID: 1},
+		Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body:      &maxclient.MessageBody{Text: "Сменить номер"},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok, _ := st.PendingChoice(42, time.Now()); ok {
+	if _, _, _, _, ok, _ := st.PendingChoice(42, time.Now()); ok {
 		t.Fatal("pending choice remains")
 	}
 	if link, _ := st.GetByUserID(42); link != nil {
 		t.Fatal("link remains")
 	}
 }
+
+const testBotToken = "test-token"
 
 func testHandler(t *testing.T, allow []int64, gw *fakeGW) (*Handler, *storage.Storage) {
 	t.Helper()
@@ -226,6 +240,7 @@ func testHandler(t *testing.T, allow []int64, gw *fakeGW) (*Handler, *storage.St
 		gateway:   gw,
 		storage:   st,
 		LinkAllow: linkallow.New(allow),
+		BotToken:  testBotToken,
 	}
 	return h, st
 }

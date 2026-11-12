@@ -2,10 +2,9 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/consenttext"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
@@ -29,89 +28,96 @@ func (h *Handler) maybeConsent(ctx context.Context, chatID, userID, patientID in
 	if view.MessengerNotify != nil || view.Service != "none" {
 		return nil
 	}
-	return h.sendServiceConsent(ctx, chatID, patientID)
+	return h.sendServiceConsent(ctx, chatID, userID, patientID)
 }
 
-func (h *Handler) sendServiceConsent(ctx context.Context, chatID, patientID int64) error {
+const consentStale = "Это сообщение устарело. Отправьте „Включить уведомления“"
+
+func (h *Handler) sendServiceConsent(ctx context.Context, chatID, userID, patientID int64) error {
+	nonce, err := h.storage.SaveConsentPrompt(userID, patientID, "service", h.serviceVersion(), h.today())
+	if err != nil {
+		return err
+	}
 	rows := [][]maxclient.CallbackButton{{
-		{Type: "callback", Text: "Согласен", Payload: fmt.Sprintf("consent:service:accept:%d", patientID), Intent: "positive"},
-		{Type: "callback", Text: "Не сейчас", Payload: fmt.Sprintf("consent:service:later:%d", patientID), Intent: "negative"},
+		{Type: "callback", Text: "Согласен", Payload: "consent:" + nonce + ":accept", Intent: "positive"},
+		{Type: "callback", Text: "Не сейчас", Payload: "consent:" + nonce + ":later", Intent: "negative"},
 	}}
 	return h.max.SendMessageWithKeyboard(ctx, chatID, false, consenttext.ServiceText, rows)
 }
 
 func (h *Handler) sendAdsConsent(ctx context.Context, userID, patientID int64) error {
+	nonce, err := h.storage.SaveConsentPrompt(userID, patientID, "ads", h.adsVersion(), h.today())
+	if err != nil {
+		return err
+	}
 	rows := [][]maxclient.CallbackButton{{
-		{Type: "callback", Text: "Да, хочу", Payload: fmt.Sprintf("consent:ads:accept:%d", patientID), Intent: "positive"},
-		{Type: "callback", Text: "Нет, спасибо", Payload: fmt.Sprintf("consent:ads:later:%d", patientID), Intent: "negative"},
+		{Type: "callback", Text: "Да, хочу", Payload: "consent:" + nonce + ":accept", Intent: "positive"},
+		{Type: "callback", Text: "Нет, спасибо", Payload: "consent:" + nonce + ":later", Intent: "negative"},
 	}}
 	return h.max.SendMessageWithKeyboard(ctx, userID, true, consenttext.AdsText, rows)
 }
 
 func (h *Handler) onConsentCallback(ctx context.Context, callbackID string, userID int64, payload string) error {
 	parts := strings.Split(payload, ":")
-	if len(parts) != 4 || parts[0] != "consent" {
-		return h.max.AnswerCallback(ctx, callbackID, "Не удалось обработать нажатие")
+	if len(parts) != 3 || parts[0] != "consent" || parts[2] != "accept" && parts[2] != "later" {
+		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
-	kind, action := parts[1], parts[2]
-	patientID, err := strconv.ParseInt(parts[3], 10, 64)
-	if err != nil || patientID <= 0 {
-		return h.max.AnswerCallback(ctx, callbackID, "Не удалось обработать нажатие")
-	}
+	action := parts[2]
 	link, err := h.storage.GetByUserID(userID)
 	if err != nil || !link.Verified() {
-		return h.max.AnswerCallback(ctx, callbackID, "Сначала подтвердите номер контактом")
+		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
-	if link.PatientID != patientID {
-		return h.max.AnswerCallback(ctx, callbackID, "Это согласие относится к другому профилю")
+	prompt, used, err := h.storage.LookupConsentPrompt(parts[1])
+	if err != nil {
+		log.Printf("consent prompt user=%d: %v", userID, err)
+		return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
 	}
-	if action == "accept" && ((kind == "service" && !h.ConsentEnabled) || (kind == "ads" && !h.AdsEnabled)) {
-		return h.max.AnswerCallback(ctx, callbackID, "Сейчас это недоступно")
+	version := h.serviceVersion()
+	if prompt != nil && prompt.Kind == "ads" {
+		version = h.adsVersion()
 	}
-	if h.Consent == nil {
-		return h.max.AnswerCallback(ctx, callbackID, "Не удалось обработать нажатие")
+	if prompt == nil || used || prompt.UserID != userID || prompt.PatientID != link.PatientID || prompt.TextVersion != version || h.today().Sub(prompt.CreatedAt) > 30*24*time.Hour {
+		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
-	version := h.ServiceVersion
-	if version == "" {
-		version = consenttext.ServiceVersion
+	if (prompt.Kind == "service" && !h.ConsentEnabled) || (prompt.Kind == "ads" && !h.AdsEnabled) || h.Consent == nil {
+		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
-	if kind == "ads" {
-		version = h.AdsVersion
-		if version == "" {
-			version = consenttext.AdsVersion
-		}
+	marked, err := h.storage.MarkConsentPromptUsed(parts[1], h.today())
+	if err != nil || !marked {
+		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
 	note := ""
 	switch {
-	case kind == "service" && action == "later":
+	case prompt.Kind == "service" && action == "later":
 		note = "Хорошо, напоминания приходить не будут. Включить — командой „Включить уведомления“."
-	case kind == "ads" && action == "later":
+	case prompt.Kind == "ads" && action == "later":
 		note = "Хорошо, сообщения об акциях приходить не будут."
-	case action == "accept" && (kind == "service" || kind == "ads"):
+	case action == "accept":
 		view, err := h.Consent.GetConsent(ctx, link.PatientID)
 		if err != nil {
 			log.Printf("consent read user=%d patient=%d: %v", userID, link.PatientID, err)
 			return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
 		}
-		already := (kind == "service" && view.Service == "active" && view.ServiceVersion == version) || (kind == "ads" && view.Ads == "active" && view.AdsVersion == version)
+		already := (prompt.Kind == "service" && view.Service == "active" && view.ServiceVersion == prompt.TextVersion) ||
+			(prompt.Kind == "ads" && view.Ads == "active" && view.AdsVersion == prompt.TextVersion)
 		if !already {
-			if err := h.Consent.PostConsent(ctx, link.PatientID, userID, kind, version, "accept"); err != nil {
-				log.Printf("consent accept user=%d patient=%d kind=%s: %v", userID, link.PatientID, kind, err)
+			if err := h.Consent.PostConsent(ctx, link.PatientID, userID, prompt.Kind, prompt.TextVersion, "accept"); err != nil {
+				log.Printf("consent accept user=%d patient=%d kind=%s: %v", userID, link.PatientID, prompt.Kind, err)
 				return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
 			}
 		}
-		if kind == "service" {
+		if prompt.Kind == "service" {
 			note = "Спасибо! Будем напоминать о приёмах. Отключить — командой „Отключить уведомления“."
 		} else {
 			note = "Спасибо! Сообщения об акциях можно отключить командой „Отписаться от акций“."
 		}
 	default:
-		return h.max.AnswerCallback(ctx, callbackID, "Не удалось обработать нажатие")
+		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
 	if err := h.max.AnswerCallbackReplace(ctx, callbackID, note, note); err != nil {
 		return h.max.AnswerCallback(ctx, callbackID, note)
 	}
-	if h.AdsEnabled && kind == "service" {
+	if h.AdsEnabled && prompt.Kind == "service" && action == "accept" {
 		return h.sendAdsConsent(ctx, userID, link.PatientID)
 	}
 	return nil
@@ -143,7 +149,7 @@ func (h *Handler) handleConsentCommand(ctx context.Context, chatID, userID int64
 		if h.Consent == nil {
 			return true, h.max.SendMessage(ctx, chatID, "Уведомления пока не настроены.")
 		}
-		return true, h.sendServiceConsent(ctx, chatID, link.PatientID)
+		return true, h.sendServiceConsent(ctx, chatID, userID, link.PatientID)
 	default:
 		return false, nil
 	}
@@ -161,6 +167,7 @@ func (h *Handler) revokeConsent(ctx context.Context, chatID, userID int64, kind,
 		log.Printf("consent revoke user=%d patient=%d kind=%s: %v", userID, link.PatientID, kind, err)
 		return h.max.SendMessage(ctx, chatID, "Не удалось сохранить, попробуйте позже")
 	}
+	_ = h.storage.ExpireConsentPrompts(userID, kind, h.today())
 	return h.max.SendMessage(ctx, chatID, note)
 }
 

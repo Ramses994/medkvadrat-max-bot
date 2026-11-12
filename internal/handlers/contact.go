@@ -39,7 +39,10 @@ func (h *Handler) handleContact(ctx context.Context, chatID, userID int64, msg *
 	if h.ContactDebug && msg.Body != nil {
 		log.Printf("contact shape user=%d %s", userID, maxclient.DescribeAttachments(msg.Body.Attachments))
 	}
-	phone, outcome := contactPhone(msg, userID)
+	phone, outcome, hashCheck := contactPhone(msg, userID, h.BotToken)
+	if h.ContactDebug && hashCheck != "" {
+		log.Printf("contact hash user=%d hash_check=%s", userID, hashCheck)
+	}
 	if outcome != "ok" {
 		h.logLink(userID, 0, outcome)
 		return h.askContact(ctx, chatID, contactNotOwn)
@@ -47,9 +50,9 @@ func (h *Handler) handleContact(ctx context.Context, chatID, userID int64, msg *
 	return h.handleAuthentication(ctx, chatID, userID, phone)
 }
 
-func contactPhone(msg *maxclient.Message, senderID int64) (string, string) {
+func contactPhone(msg *maxclient.Message, senderID int64, token string) (string, string, string) {
 	if msg == nil || msg.Body == nil || senderID <= 0 {
-		return "", "contact_not_own"
+		return "", "contact_not_own", ""
 	}
 	for _, att := range msg.Body.Attachments {
 		if att.Type != "contact" || len(att.Payload) == 0 {
@@ -57,23 +60,28 @@ func contactPhone(msg *maxclient.Message, senderID int64) (string, string) {
 		}
 		var payload struct {
 			VcfInfo string `json:"vcf_info"`
+			Hash    string `json:"hash"`
 			MaxInfo *struct {
 				UserID int64 `json:"user_id"`
 			} `json:"max_info"`
 		}
-		if err := json.Unmarshal(att.Payload, &payload); err != nil || payload.MaxInfo == nil || payload.MaxInfo.UserID == 0 {
-			return "", "contact_not_own"
+		if err := json.Unmarshal(att.Payload, &payload); err != nil {
+			return "", "contact_not_own", "fail"
 		}
-		if payload.MaxInfo.UserID != senderID {
-			return "", "contact_not_own"
+		ok, how := checkContactHash(token, payload.VcfInfo, payload.Hash)
+		if !ok {
+			return "", "contact_not_own", how
+		}
+		if payload.MaxInfo != nil && payload.MaxInfo.UserID != senderID {
+			return "", "contact_not_own", how
 		}
 		numbers := distinctPhones(payload.VcfInfo)
 		if len(numbers) != 1 {
-			return "", "contact_not_own"
+			return "", "contact_not_own", how
 		}
-		return numbers[0], "ok"
+		return numbers[0], "ok", how
 	}
-	return "", "contact_not_own"
+	return "", "contact_not_own", ""
 }
 
 func distinctPhones(vcf string) []string {

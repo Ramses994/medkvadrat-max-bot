@@ -93,7 +93,25 @@ func New(path string) (*Storage, error) {
 		user_id INTEGER PRIMARY KEY,
 		phone TEXT NOT NULL,
 		patient_ids TEXT NOT NULL,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		step TEXT NOT NULL DEFAULT 'choose',
+		selected_id INTEGER NOT NULL DEFAULT 0
+	);
+
+	CREATE TABLE IF NOT EXISTS birth_checks (
+		user_id INTEGER PRIMARY KEY,
+		failures INTEGER NOT NULL DEFAULT 0,
+		blocked_until TEXT NOT NULL DEFAULT ''
+	);
+
+	CREATE TABLE IF NOT EXISTS consent_prompts (
+		nonce TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		patient_id INTEGER NOT NULL,
+		kind TEXT NOT NULL,
+		text_version TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		used_at TEXT
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -104,6 +122,8 @@ func New(path string) (*Storage, error) {
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN drop_reason TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN created_at DATETIME NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE user_links ADD COLUMN verified_at TEXT`)
+	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN step TEXT NOT NULL DEFAULT 'choose'`)
+	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN selected_id INTEGER NOT NULL DEFAULT 0`)
 
 	return &Storage{db: db}, nil
 }

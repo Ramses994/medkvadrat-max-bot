@@ -30,6 +30,7 @@ type Handler struct {
 	LinkAllow      linkallow.Set
 	KeyboardDebug  bool
 	ContactDebug   bool
+	BotToken       string
 	Consent        consentAPI
 	ConsentEnabled bool
 	AdsEnabled     bool
@@ -62,9 +63,15 @@ func filterAllowedPatients(allow linkallow.Set, patients []gateway.Patient) []ga
 // ===== Входные события =====
 
 func (h *Handler) OnBotStarted(ctx context.Context, u *maxclient.Update) error {
-	if u.Payload != "" {
-		log.Printf("bot_started chat=%d payload=%q", u.ChatID, u.Payload)
+	userID := int64(0)
+	if u.User != nil {
+		userID = u.User.UserID
 	}
+	payload := "нет"
+	if strings.TrimSpace(u.Payload) != "" {
+		payload = "есть"
+	}
+	log.Printf("bot_started user=%d payload=%s", userID, payload)
 
 	if h.KeyboardDebug {
 		userID := int64(0)
@@ -81,8 +88,12 @@ func (h *Handler) OnBotStarted(ctx context.Context, u *maxclient.Update) error {
 	return h.sendWelcome(ctx, u.ChatID, link)
 }
 
+func dialogMessage(m *maxclient.Message) bool {
+	return m != nil && m.Recipient != nil && m.Recipient.ChatType == "dialog"
+}
+
 func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) error {
-	if u.Message == nil || u.Message.Body == nil || u.Message.Sender == nil {
+	if u.Message == nil || u.Message.Body == nil || u.Message.Sender == nil || !dialogMessage(u.Message) {
 		return nil
 	}
 	text := strings.TrimSpace(u.Message.Body.Text)
@@ -134,8 +145,13 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 		}
 		return h.handleAuthenticated(ctx, chatID, link, text)
 	}
+	if blocked, err := h.storage.BirthBlocked(userID, h.today()); err != nil {
+		return err
+	} else if blocked {
+		return h.max.SendMessage(ctx, chatID, "Обратитесь в регистратуру: "+registryPhone)
+	}
 
-	if _, _, ok, err := h.storage.PendingChoice(userID, h.today()); err != nil {
+	if _, _, _, _, ok, err := h.storage.PendingChoice(userID, h.today()); err != nil {
 		return err
 	} else if ok && normalizePhone(text) == "" {
 		phone := ""
@@ -182,6 +198,11 @@ func (h *Handler) sendWelcome(ctx context.Context, chatID int64, link *storage.U
 // ===== Авторизация и Выбор пациента =====
 
 func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64, text string) error {
+	if blocked, err := h.storage.BirthBlocked(userID, h.today()); err != nil {
+		return err
+	} else if blocked {
+		return h.max.SendMessage(ctx, chatID, "Обратитесь в регистратуру: "+registryPhone)
+	}
 	phone := normalizePhone(text)
 	if phone == "" {
 		return h.max.SendMessage(ctx, chatID,
@@ -257,12 +278,12 @@ func sortPatients(ps []gateway.Patient) {
 }
 
 func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int64, phone, text string) error {
-	choice, err := strconv.Atoi(text)
-	if err != nil || choice < 1 {
-		return h.max.SendMessage(ctx, chatID, "Пожалуйста, отправьте просто цифру из списка (например, 1).")
+	if blocked, err := h.storage.BirthBlocked(userID, h.today()); err != nil {
+		return err
+	} else if blocked {
+		return h.max.SendMessage(ctx, chatID, "Обратитесь в регистратуру: "+registryPhone)
 	}
-
-	savedPhone, ids, ok, err := h.storage.PendingChoice(userID, h.today())
+	savedPhone, ids, step, selectedID, ok, err := h.storage.PendingChoice(userID, h.today())
 	if err != nil {
 		log.Printf("pending choice user=%d: %v", userID, err)
 		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
@@ -271,11 +292,24 @@ func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int
 		_ = h.storage.Unlink(userID)
 		return h.askContact(ctx, chatID, "Список устарел. "+contactTypedPhone)
 	}
+	if step == "birth" {
+		return h.confirmBirth(ctx, chatID, userID, savedPhone, selectedID, text)
+	}
+	choice, err := strconv.Atoi(text)
+	if err != nil || choice < 1 {
+		return h.max.SendMessage(ctx, chatID, "Пожалуйста, отправьте просто цифру из списка (например, 1).")
+	}
 	if choice > len(ids) {
 		return h.max.SendMessage(ctx, chatID, "Такого номера нет в списке. Пожалуйста, отправьте правильную цифру.")
 	}
-	selectedID := ids[choice-1]
+	if err := h.storage.SaveBirthStep(userID, savedPhone, ids[choice-1], h.today()); err != nil {
+		return fmt.Errorf("storage.SaveBirthStep: %w", err)
+	}
+	return h.max.SendMessage(ctx, chatID, "Введите дату рождения выбранного пациента в формате ДД.ММ.ГГГГ")
+}
 
+func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone string, selectedID int64, text string) error {
+	born, dateOK := parseBirthDate(text, h.today().Location())
 	found, err := h.gateway.SearchByPhone(ctx, phone)
 	if err != nil {
 		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
@@ -290,7 +324,28 @@ func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int
 		}
 	}
 	if selected == nil || !h.LinkAllow.Allowed(selectedID) {
+		_ = h.storage.DeletePendingChoice(userID)
 		return h.max.SendMessage(ctx, chatID, "Этот профиль больше недоступен по этому номеру. Отправьте другую цифру или «Сменить номер».")
+	}
+	if !adult(selected.BirthDate, h.today()) {
+		_ = h.storage.DeletePendingChoice(userID)
+		h.logLink(userID, 0, "minor_hidden")
+		return h.max.SendMessage(ctx, chatID, contactNotFound)
+	}
+	want := ""
+	if len(selected.BirthDate) >= 10 {
+		want = selected.BirthDate[:10]
+	}
+	if !dateOK || born.Format("2006-01-02") != want {
+		blocked, err := h.storage.NoteBirthFailure(userID, h.today())
+		if err != nil {
+			return err
+		}
+		if blocked {
+			_ = h.storage.DeletePendingChoice(userID)
+			return h.max.SendMessage(ctx, chatID, "Обратитесь в регистратуру: "+registryPhone)
+		}
+		return h.max.SendMessage(ctx, chatID, "Дата не совпадает\nВведите дату рождения выбранного пациента в формате ДД.ММ.ГГГГ")
 	}
 	if err := h.storage.LinkVerified(userID, selectedID, phone, selected.FullName, h.today()); err != nil {
 		return fmt.Errorf("storage.Link final: %w", err)
@@ -298,7 +353,7 @@ func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int
 	if err := h.storage.DeletePendingChoice(userID); err != nil {
 		return fmt.Errorf("storage.DeletePendingChoice: %w", err)
 	}
-
+	_ = h.storage.ClearBirthFailures(userID)
 	h.logLink(userID, selectedID, "linked")
 	if err := h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 		"Вы успешно авторизовались как %s! ✅\n\n"+
@@ -308,6 +363,15 @@ func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int
 		return err
 	}
 	return h.maybeConsent(ctx, chatID, userID, selectedID)
+}
+
+func parseBirthDate(text string, loc *time.Location) (time.Time, bool) {
+	text = strings.TrimSpace(text)
+	born, err := time.ParseInLocation("02.01.2006", text, loc)
+	if err != nil || born.Format("02.01.2006") != text {
+		return time.Time{}, false
+	}
+	return born, true
 }
 
 // ===== Команды авторизованного пользователя =====

@@ -70,6 +70,7 @@ func main() {
 	h.LinkAllow = linkAllow
 	h.KeyboardDebug = cfg.KeyboardDebug
 	h.ContactDebug = cfg.ContactDebug
+	h.BotToken = cfg.MaxBotToken
 	h.Consent = gw
 	h.ConsentEnabled = cfg.ConsentEnabled
 	h.AdsEnabled = cfg.ConsentAdsEnabled

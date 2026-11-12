@@ -12,9 +12,12 @@ import (
 
 type fakeDueGateway struct {
 	err          error
+	bookingErr   error
 	rows         []gateway.DueReminder
 	calls        int
+	bookingCalls int
 	lastPatients []int64
+	onBooking    func(id int64, row gateway.DueReminder) gateway.DueReminder
 }
 
 func (f *fakeDueGateway) DueReminders(ctx context.Context, from, to time.Time, patientIDs []int64) ([]gateway.DueReminder, error) {
@@ -24,6 +27,22 @@ func (f *fakeDueGateway) DueReminders(ctx context.Context, from, to time.Time, p
 		return nil, f.err
 	}
 	return f.rows, nil
+}
+
+func (f *fakeDueGateway) BookingByPlanningID(_ context.Context, planningID int64) (gateway.BookingSnapshot, error) {
+	f.bookingCalls++
+	if f.bookingErr != nil {
+		return gateway.BookingSnapshot{}, f.bookingErr
+	}
+	for _, row := range f.rows {
+		if row.PlanningID == planningID {
+			if f.onBooking != nil {
+				row = f.onBooking(planningID, row)
+			}
+			return gateway.BookingSnapshot{NewBooking: gateway.NewBooking{DueReminder: row}}, nil
+		}
+	}
+	return gateway.BookingSnapshot{}, errors.New("booking missing")
 }
 
 type fakeMessenger struct {
@@ -161,5 +180,71 @@ func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
 	}
 	if len(msg.sent) != 0 {
 		t.Fatalf("expected no sends, got %v", msg.sent)
+	}
+}
+
+func TestRunner_RecheckStopsTheSecondReminderAfterRevoke(t *testing.T) {
+	store, err := storage.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.LinkVerified(42, 6789, "79991234567", "Иванова", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := msk(2026, time.June, 23, 10, 30)
+	one := 1
+	row := func(id int64) gateway.DueReminder {
+		return gateway.DueReminder{
+			PlanningID: id, PatientID: 6789, MessengerNotify: &one, BotConsentService: "active",
+			ApptVersion: "v1", BranchID: 106, DateConsultation: "2026-06-24 10:30",
+		}
+	}
+	n := 0
+	gw := &fakeDueGateway{rows: []gateway.DueReminder{row(11), row(12)}, onBooking: func(_ int64, live gateway.DueReminder) gateway.DueReminder {
+		n++
+		if n > 1 {
+			live.BotConsentService = "revoked"
+		}
+		return live
+	}}
+	msg := &fakeMessenger{}
+	r := &Runner{Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789}, Now: func() time.Time { return now }}
+	r.Tick(context.Background())
+	if len(msg.sent) != 1 {
+		t.Fatalf("sent %v", msg.sent)
+	}
+	sent, err := store.WasReminderSent(12, "d1")
+	if err != nil || sent {
+		t.Fatalf("second marked=%v err=%v", sent, err)
+	}
+}
+
+func TestRunner_RecheckErrorDoesNotSendOrMark(t *testing.T) {
+	store, err := storage.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.LinkVerified(42, 6789, "79991234567", "Иванова", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	one := 1
+	gw := &fakeDueGateway{
+		bookingErr: errors.New("down"),
+		rows: []gateway.DueReminder{{
+			PlanningID: 11, PatientID: 6789, MessengerNotify: &one, BotConsentService: "active",
+			ApptVersion: "v1", BranchID: 106, DateConsultation: "2026-06-24 10:30",
+		}},
+	}
+	msg := &fakeMessenger{}
+	r := &Runner{
+		Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789},
+		Now: func() time.Time { return msk(2026, time.June, 23, 10, 30) },
+	}
+	r.Tick(context.Background())
+	sent, err := store.WasReminderSent(11, "d1")
+	if err != nil || sent || len(msg.sent) != 0 {
+		t.Fatalf("sent=%v marked=%v err=%v", msg.sent, sent, err)
 	}
 }

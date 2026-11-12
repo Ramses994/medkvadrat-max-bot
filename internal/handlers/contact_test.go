@@ -3,6 +3,10 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"log"
 	"os"
 	"strings"
@@ -14,10 +18,35 @@ import (
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/reminders"
 )
 
+func hmacHex(token, vcf string) string {
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte(vcf))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func contactJSON(vcf, hash string, userID int64) string {
+	body := map[string]any{"vcf_info": vcf}
+	if hash != "" {
+		body["hash"] = hash
+	}
+	if userID != 0 {
+		body["max_info"] = map[string]any{"user_id": userID}
+	}
+	raw, _ := json.Marshal(body)
+	return string(raw)
+}
+
+func dialogCallback(user int64, payload string) *maxclient.Update {
+	return &maxclient.Update{
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}},
+		Callback: &maxclient.Callback{CallbackID: "cb", Payload: payload, User: &maxclient.User{UserID: user}},
+	}
+}
+
 func contactUpdate(sender int64, payload string) *maxclient.Update {
 	return &maxclient.Update{Message: &maxclient.Message{
 		Sender:    &maxclient.User{UserID: sender},
-		Recipient: &maxclient.Recipient{ChatID: 1},
+		Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body: &maxclient.MessageBody{Attachments: []maxclient.Attachment{{
 			Type:    "contact",
 			Payload: []byte(payload),
@@ -33,7 +62,8 @@ func TestContact_OwnContactLinksAndOtherIsRefused(t *testing.T) {
 	gw := &fakeGW{patients: []gateway.Patient{{PatientID: 100, FullName: "Иванов Иван", BirthDate: "1985-01-01"}}}
 	h, st := testHandler(t, []int64{100}, gw)
 	h.ContactDebug = true
-	own := `{"vcf_info":"TEL;TYPE=CELL:+7 (999) 111-22-33","max_info":{"user_id":42}}`
+	ownVCF := "TEL;TYPE=CELL:+7 (999) 111-22-33"
+	own := contactJSON(ownVCF, hmacHex(testBotToken, ownVCF), 42)
 	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, own)); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +78,8 @@ func TestContact_OwnContactLinksAndOtherIsRefused(t *testing.T) {
 		t.Fatalf("shape log count=%d %s", strings.Count(logs.String(), "contact shape"), logs.String())
 	}
 
-	other := `{"vcf_info":"TEL:+79990000000","max_info":{"user_id":99}}`
+	otherVCF := "TEL:+79990000000"
+	other := contactJSON(otherVCF, hmacHex(testBotToken, otherVCF), 99)
 	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, other)); err != nil {
 		t.Fatal(err)
 	}
@@ -64,10 +95,11 @@ func TestContact_OwnContactLinksAndOtherIsRefused(t *testing.T) {
 func TestContact_MissingMaxInfoAndTwoNumbersRefuse(t *testing.T) {
 	gw := &fakeGW{patients: []gateway.Patient{{PatientID: 100, FullName: "Иванов Иван", BirthDate: "1985-01-01"}}}
 	h, st := testHandler(t, []int64{100}, gw)
-	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, `{"vcf_info":"TEL:+79991112233"}`)); err != nil {
+	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, contactJSON("TEL:+79991112233", "", 0))); err != nil {
 		t.Fatal(err)
 	}
-	two := `{"vcf_info":"TEL:+79991112233\nTEL:+79990000000","max_info":{"user_id":42}}`
+	twoVCF := "TEL:+79991112233\nTEL:+79990000000"
+	two := contactJSON(twoVCF, hmacHex(testBotToken, twoVCF), 42)
 	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, two)); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +116,7 @@ func TestTypedPhoneAsksForTheButton(t *testing.T) {
 	gw := &fakeGW{patients: []gateway.Patient{{PatientID: 100, FullName: "Иванов Иван", BirthDate: "1985-01-01"}}}
 	h, st := testHandler(t, []int64{100}, gw)
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
-		Sender: &maxclient.User{UserID: 7}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Sender: &maxclient.User{UserID: 7}, Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body: &maxclient.MessageBody{Text: "+79991112233"},
 	}})
 	if err != nil {
@@ -122,7 +154,7 @@ func TestUnverifiedLinkGetsNeitherLabsNorReminders(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
-		Sender: &maxclient.User{UserID: 7}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Sender: &maxclient.User{UserID: 7}, Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body: &maxclient.MessageBody{Text: "Мои анализы"},
 	}})
 	if err != nil {
@@ -178,6 +210,14 @@ func (s *scriptConsent) DueReminders(context.Context, time.Time, time.Time, []in
 	}}, nil
 }
 
+func (s *scriptConsent) BookingByPlanningID(context.Context, int64) (gateway.BookingSnapshot, error) {
+	rows, err := s.DueReminders(context.Background(), time.Time{}, time.Time{}, nil)
+	if err != nil || len(rows) == 0 {
+		return gateway.BookingSnapshot{}, err
+	}
+	return gateway.BookingSnapshot{NewBooking: gateway.NewBooking{DueReminder: rows[0]}}, nil
+}
+
 func TestConsentScreen_OnlyWhenMissingAndAcceptIsOnce(t *testing.T) {
 	gw := &fakeGW{patients: []gateway.Patient{{PatientID: 100, FullName: "Иванов Иван", BirthDate: "1985-01-01"}}}
 	h, _ := testHandler(t, []int64{100}, gw)
@@ -227,12 +267,13 @@ func TestConsentAccept_PostsVersionOnceAndRevokeBeatsQuestionnaire(t *testing.T)
 	h.Consent = cons
 	h.ConsentEnabled = true
 	h.ServiceVersion = "service-v1"
+	if err := h.sendServiceConsent(context.Background(), 1, 42, 100); err != nil {
+		t.Fatal(err)
+	}
+	payload := h.max.(*fakeMax).keyboards[0].rows[0][0].Payload
 	press := func() {
 		t.Helper()
-		err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
-			CallbackID: "cb", Payload: "consent:service:accept:100", User: &maxclient.User{UserID: 42},
-		}})
-		if err != nil {
+		if err := h.OnMessageCallback(context.Background(), dialogCallback(42, payload)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -243,7 +284,7 @@ func TestConsentAccept_PostsVersionOnceAndRevokeBeatsQuestionnaire(t *testing.T)
 	}
 	one := 1
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
-		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body: &maxclient.MessageBody{Text: "Отключить уведомления"},
 	}})
 	if err != nil {
@@ -267,7 +308,7 @@ func TestDisableNotifications_RecordsRevokeAndSkipsTheNextReminder(t *testing.T)
 	cons := &scriptConsent{view: gateway.ConsentView{MessengerNotify: &one, Service: "none"}}
 	h.Consent = cons
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
-		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body: &maxclient.MessageBody{Text: "Отключить уведомления"},
 	}})
 	if err != nil {
@@ -309,7 +350,7 @@ func TestEnableNotifications_FlagOffHidesTheDraft(t *testing.T) {
 	say := func(text string) {
 		t.Helper()
 		err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
-			Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+			Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 			Body: &maxclient.MessageBody{Text: text},
 		}})
 		if err != nil {
@@ -327,13 +368,11 @@ func TestEnableNotifications_FlagOffHidesTheDraft(t *testing.T) {
 	if strings.Contains(last, "[") || !strings.Contains(last, "пока нельзя") {
 		t.Fatalf("flag off: %q", last)
 	}
-	err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
-		CallbackID: "cb", Payload: "consent:service:accept:100", User: &maxclient.User{UserID: 42},
-	}})
+	err := h.OnMessageCallback(context.Background(), dialogCallback(42, "consent:service:accept:100"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cons.posts) != 0 || len(fm.answers) == 0 || fm.answers[len(fm.answers)-1] != "Сейчас это недоступно" {
+	if len(cons.posts) != 0 || len(fm.answers) == 0 || fm.answers[len(fm.answers)-1] != consentStale {
 		t.Fatalf("posts=%v answers=%v", cons.posts, fm.answers)
 	}
 }
@@ -347,14 +386,16 @@ func TestAdsConsent_GoesToTheUser(t *testing.T) {
 	h.ConsentEnabled = true
 	h.AdsEnabled = true
 	h.ServiceVersion = "service-v1"
-	err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
-		CallbackID: "cb", Payload: "consent:service:accept:100", User: &maxclient.User{UserID: 42},
-	}})
-	if err != nil {
+	if err := h.sendServiceConsent(context.Background(), 1, 42, 100); err != nil {
 		t.Fatal(err)
 	}
 	fm := h.max.(*fakeMax)
-	if len(fm.keyboards) != 1 || !fm.keyboards[0].byUser || fm.keyboards[0].recipient != 42 {
+	err := h.OnMessageCallback(context.Background(), dialogCallback(42, fm.keyboards[0].rows[0][0].Payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := fm.keyboards[len(fm.keyboards)-1]
+	if !last.byUser || last.recipient != 42 {
 		t.Fatalf("keyboards=%+v", fm.keyboards)
 	}
 }
@@ -369,10 +410,7 @@ func TestConsentCallback_RefusesAnotherProfileAndOldPayload(t *testing.T) {
 	h.ConsentEnabled = true
 	press := func(payload string) {
 		t.Helper()
-		err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
-			CallbackID: "cb", Payload: payload, User: &maxclient.User{UserID: 42},
-		}})
-		if err != nil {
+		if err := h.OnMessageCallback(context.Background(), dialogCallback(42, payload)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -382,7 +420,7 @@ func TestConsentCallback_RefusesAnotherProfileAndOldPayload(t *testing.T) {
 	if len(cons.posts) != 0 || len(fm.answers) != 2 {
 		t.Fatalf("posts=%v answers=%v", cons.posts, fm.answers)
 	}
-	if fm.answers[0] != "Это согласие относится к другому профилю" || fm.answers[1] != "Не удалось обработать нажатие" {
+	if fm.answers[0] != consentStale || fm.answers[1] != consentStale {
 		t.Fatalf("answers=%v", fm.answers)
 	}
 }
@@ -393,7 +431,7 @@ func TestDisableNotifications_WithoutAPI_DoesNotClaimSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
-		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1, ChatType: "dialog"},
 		Body: &maxclient.MessageBody{Text: "Отключить уведомления"},
 	}})
 	if err != nil {
@@ -415,22 +453,23 @@ func TestAdsAccept_RequiresTheSameVersion(t *testing.T) {
 	h.Consent = cons
 	h.AdsEnabled = true
 	h.AdsVersion = "ads-v1"
-	press := func() {
+	if err := h.sendAdsConsent(context.Background(), 42, 100); err != nil {
+		t.Fatal(err)
+	}
+	payload := h.max.(*fakeMax).keyboards[0].rows[0][0].Payload
+	press := func(p string) {
 		t.Helper()
-		err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
-			CallbackID: "cb", Payload: "consent:ads:accept:100", User: &maxclient.User{UserID: 42},
-		}})
-		if err != nil {
+		if err := h.OnMessageCallback(context.Background(), dialogCallback(42, p)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	press()
+	press(payload)
 	if len(cons.posts) != 0 {
 		t.Fatalf("same version posted %v", cons.posts)
 	}
 	h.AdsVersion = "ads-v2"
-	press()
-	if len(cons.posts) != 1 || cons.posts[0] != "ads:ads-v2:accept" {
-		t.Fatalf("posts=%v", cons.posts)
+	press(payload)
+	if len(cons.posts) != 0 {
+		t.Fatalf("old button adopted the new version %v", cons.posts)
 	}
 }

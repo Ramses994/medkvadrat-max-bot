@@ -11,7 +11,7 @@ import (
 )
 
 func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) error {
-	if u.Callback == nil {
+	if u.Callback == nil || !dialogMessage(u.Message) {
 		return nil
 	}
 	cb := u.Callback
@@ -38,7 +38,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 
 	action, planningID, apptVersion, ok := apptconfirm.ParsePayload(cb.Payload)
 	if !ok {
-		log.Printf("message_callback bad payload chat_id=%d user_id=%d payload=%q", chatID, userID, cb.Payload)
+		log.Printf("message_callback bad payload chat_id=%d user_id=%d", chatID, userID)
 		return answer("Не удалось обработать нажатие")
 	}
 

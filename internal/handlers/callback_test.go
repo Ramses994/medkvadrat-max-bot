@@ -34,7 +34,7 @@ func TestCallback_ReplacesKeyboard(t *testing.T) {
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "declined"}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestCallback_RescheduleWaitlistText(t *testing.T) {
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "reschedule"}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "reschedule:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestCallback_StaleReminderKeepsF5Text(t *testing.T) {
 	h := &Handler{max: fm, gateway: &scriptGW{stale: true}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestCallback_AlreadyAnsweredStillClearsKeyboard(t *testing.T) {
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "confirmed", already: true}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
-		Message:  &maxclient.Message{Body: &maxclient.MessageBody{Text: "Напоминание"}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}, Body: &maxclient.MessageBody{Text: "Напоминание"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
@@ -135,6 +135,7 @@ func TestCallback_UnverifiedAsksForTheContactButton(t *testing.T) {
 	h := &Handler{max: fm, gateway: &scriptGW{}, storage: st}
 	u := &maxclient.Update{
 		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
+		Message:  &maxclient.Message{Recipient: &maxclient.Recipient{ChatType: "dialog"}},
 	}
 	if err := h.OnMessageCallback(context.Background(), u); err != nil {
 		t.Fatal(err)
