@@ -174,36 +174,69 @@ func TestUnverifiedLinkGetsNeitherLabsNorReminders(t *testing.T) {
 }
 
 type scriptConsent struct {
-	view  gateway.ConsentView
-	posts []string
+	view            gateway.ConsentView
+	posts           []string
+	serviceRevision int64
+	adsRevision     int64
 }
 
 func (s *scriptConsent) GetConsent(context.Context, int64) (gateway.ConsentView, error) {
-	return s.view, nil
+	view := s.view
+	view.ServiceRevision = s.serviceRevision
+	view.AdsRevision = s.adsRevision
+	return view, nil
 }
 
-func (s *scriptConsent) PostConsent(_ context.Context, _, _ int64, kind, version, action string) error {
+func (s *scriptConsent) PostConsent(_ context.Context, _, _ int64, kind, version, action string, expected *int64) error {
+	current := s.serviceRevision
+	if kind == "ads" {
+		current = s.adsRevision
+	}
+	if action == "accept" {
+		if expected == nil || *expected != current {
+			return &gateway.Error{Op: "bot-consents", Status: 409, Code: "CONSENT_CHANGED"}
+		}
+		same := (kind == "service" && s.view.Service == "active" && s.view.ServiceVersion == version) ||
+			(kind == "ads" && s.view.Ads == "active" && s.view.AdsVersion == version)
+		if !same {
+			s.writeConsent(kind, version, action)
+			s.bump(kind)
+		}
+		s.posts = append(s.posts, kind+":"+version+":"+action)
+		return nil
+	}
+	s.writeConsent(kind, version, action)
+	s.bump(kind)
 	s.posts = append(s.posts, kind+":"+version+":"+action)
+	return nil
+}
+
+func (s *scriptConsent) writeConsent(kind, version, action string) {
 	stamp := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
-	if action == "accept" && kind == "service" {
+	switch {
+	case kind == "service" && action == "accept":
 		s.view.Service = "active"
 		s.view.ServiceVersion = version
 		s.view.ServiceAt = stamp
-	}
-	if action == "revoke" && kind == "service" {
+	case kind == "service" && action == "revoke":
 		s.view.Service = "revoked"
 		s.view.ServiceAt = stamp
-	}
-	if action == "accept" && kind == "ads" {
+	case kind == "ads" && action == "accept":
 		s.view.Ads = "active"
 		s.view.AdsVersion = version
 		s.view.AdsAt = stamp
-	}
-	if action == "revoke" && kind == "ads" {
+	case kind == "ads" && action == "revoke":
 		s.view.Ads = "revoked"
 		s.view.AdsAt = stamp
 	}
-	return nil
+}
+
+func (s *scriptConsent) bump(kind string) {
+	if kind == "ads" {
+		s.adsRevision++
+		return
+	}
+	s.serviceRevision++
 }
 
 func (s *scriptConsent) DueReminders(context.Context, time.Time, time.Time, []int64) ([]gateway.DueReminder, error) {
@@ -472,12 +505,12 @@ func TestAdsAccept_RequiresTheSameVersion(t *testing.T) {
 		}
 	}
 	press(payload)
-	if len(cons.posts) != 0 {
-		t.Fatalf("same version posted %v", cons.posts)
+	if len(cons.posts) != 1 || cons.posts[0] != "ads:ads-v1:accept" || cons.adsRevision != 0 {
+		t.Fatalf("same version %v revision=%d", cons.posts, cons.adsRevision)
 	}
 	h.AdsVersion = "ads-v2"
 	press(payload)
-	if len(cons.posts) != 0 {
+	if len(cons.posts) != 1 {
 		t.Fatalf("old button adopted the new version %v", cons.posts)
 	}
 }

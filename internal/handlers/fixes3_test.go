@@ -127,7 +127,8 @@ func TestConsentButton_CannotUndoAnotherAccountsRevoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := h.max.(*fakeMax).keyboards[0].rows[0][0].Payload
-	if err := cons.PostConsent(context.Background(), 100, 1, "service", "service-v1", "accept"); err != nil {
+	zero := int64(0)
+	if err := cons.PostConsent(context.Background(), 100, 1, "service", "service-v1", "accept", &zero); err != nil {
 		t.Fatal(err)
 	}
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
@@ -163,7 +164,8 @@ func TestConsentButton_StaleWhenExpiryFails(t *testing.T) {
 	}
 	payload := h.max.(*fakeMax).keyboards[0].rows[0][0].Payload
 	st.FailConsentExpiry(errors.New("disk"))
-	if err := cons.PostConsent(context.Background(), 100, 1, "service", "service-v1", "accept"); err != nil {
+	zero := int64(0)
+	if err := cons.PostConsent(context.Background(), 100, 1, "service", "service-v1", "accept", &zero); err != nil {
 		t.Fatal(err)
 	}
 	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{

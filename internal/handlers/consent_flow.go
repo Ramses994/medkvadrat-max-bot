@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
@@ -13,7 +14,7 @@ import (
 
 type consentAPI interface {
 	GetConsent(ctx context.Context, patientID int64) (gateway.ConsentView, error)
-	PostConsent(ctx context.Context, patientID, maxUserID int64, kind, version, action string) error
+	PostConsent(ctx context.Context, patientID, maxUserID int64, kind, version, action string, expectedRevision *int64) error
 }
 
 func (h *Handler) maybeConsent(ctx context.Context, chatID, userID, patientID int64) error {
@@ -23,7 +24,7 @@ func (h *Handler) maybeConsent(ctx context.Context, chatID, userID, patientID in
 	view, err := h.Consent.GetConsent(ctx, patientID)
 	if err != nil {
 		log.Printf("consent read user=%d patient=%d: %v", userID, patientID, err)
-		return nil
+		return h.max.SendMessage(ctx, chatID, "Не удалось, попробуйте позже")
 	}
 	if view.MessengerNotify != nil || view.Service != "none" {
 		return nil
@@ -34,7 +35,12 @@ func (h *Handler) maybeConsent(ctx context.Context, chatID, userID, patientID in
 const consentStale = "Это сообщение устарело. Отправьте „Включить уведомления“"
 
 func (h *Handler) sendServiceConsent(ctx context.Context, chatID, userID, patientID int64) error {
-	nonce, err := h.storage.SaveConsentPrompt(userID, patientID, "service", h.serviceVersion(), h.today())
+	view, err := h.Consent.GetConsent(ctx, patientID)
+	if err != nil {
+		log.Printf("consent read user=%d patient=%d: %v", userID, patientID, err)
+		return h.max.SendMessage(ctx, chatID, "Не удалось, попробуйте позже")
+	}
+	nonce, err := h.storage.SaveConsentPrompt(userID, patientID, "service", h.serviceVersion(), view.ServiceRevision, h.today())
 	if err != nil {
 		return err
 	}
@@ -46,7 +52,12 @@ func (h *Handler) sendServiceConsent(ctx context.Context, chatID, userID, patien
 }
 
 func (h *Handler) sendAdsConsent(ctx context.Context, userID, patientID int64) error {
-	nonce, err := h.storage.SaveConsentPrompt(userID, patientID, "ads", h.adsVersion(), h.today())
+	view, err := h.Consent.GetConsent(ctx, patientID)
+	if err != nil {
+		log.Printf("consent read user=%d patient=%d: %v", userID, patientID, err)
+		return h.max.SendMessageWithKeyboard(ctx, userID, true, "Не удалось, попробуйте позже", nil)
+	}
+	nonce, err := h.storage.SaveConsentPrompt(userID, patientID, "ads", h.adsVersion(), view.AdsRevision, h.today())
 	if err != nil {
 		return err
 	}
@@ -76,7 +87,7 @@ func (h *Handler) onConsentCallback(ctx context.Context, callbackID string, user
 	if prompt != nil && prompt.Kind == "ads" {
 		version = h.adsVersion()
 	}
-	if prompt == nil || used || prompt.UserID != userID || prompt.PatientID != link.PatientID || prompt.TextVersion != version || h.today().Sub(prompt.CreatedAt) > 30*24*time.Hour {
+	if prompt == nil || used || !prompt.HasRevision || prompt.UserID != userID || prompt.PatientID != link.PatientID || prompt.TextVersion != version || h.today().Sub(prompt.CreatedAt) > 30*24*time.Hour {
 		return h.max.AnswerCallback(ctx, callbackID, consentStale)
 	}
 	if (prompt.Kind == "service" && !h.ConsentEnabled) || (prompt.Kind == "ads" && !h.AdsEnabled) || h.Consent == nil {
@@ -93,25 +104,14 @@ func (h *Handler) onConsentCallback(ctx context.Context, callbackID string, user
 	case prompt.Kind == "ads" && action == "later":
 		note = "Хорошо, сообщения об акциях приходить не будут."
 	case action == "accept":
-		view, err := h.Consent.GetConsent(ctx, link.PatientID)
-		if err != nil {
-			log.Printf("consent read user=%d patient=%d: %v", userID, link.PatientID, err)
-			return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
-		}
-		changed := view.ServiceAt
-		if prompt.Kind == "ads" {
-			changed = view.AdsAt
-		}
-		if at, perr := time.Parse(time.RFC3339, changed); perr == nil && prompt.CreatedAt.Before(at) {
-			return h.max.AnswerCallback(ctx, callbackID, consentStale)
-		}
-		already := (prompt.Kind == "service" && view.Service == "active" && view.ServiceVersion == prompt.TextVersion) ||
-			(prompt.Kind == "ads" && view.Ads == "active" && view.AdsVersion == prompt.TextVersion)
-		if !already {
-			if err := h.Consent.PostConsent(ctx, link.PatientID, userID, prompt.Kind, prompt.TextVersion, "accept"); err != nil {
-				log.Printf("consent accept user=%d patient=%d kind=%s: %v", userID, link.PatientID, prompt.Kind, err)
-				return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
+		expected := prompt.Revision
+		if err := h.Consent.PostConsent(ctx, link.PatientID, userID, prompt.Kind, prompt.TextVersion, "accept", &expected); err != nil {
+			var ge *gateway.Error
+			if errors.As(err, &ge) && ge.Status == 409 && ge.Code == "CONSENT_CHANGED" {
+				return h.max.AnswerCallback(ctx, callbackID, consentStale)
 			}
+			log.Printf("consent accept user=%d patient=%d kind=%s: %v", userID, link.PatientID, prompt.Kind, err)
+			return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
 		}
 		if prompt.Kind == "service" {
 			note = "Спасибо! Будем напоминать о приёмах. Отключить — командой „Отключить уведомления“."
@@ -170,7 +170,7 @@ func (h *Handler) revokeConsent(ctx context.Context, chatID, userID int64, kind,
 	if h.Consent == nil {
 		return h.max.SendMessage(ctx, chatID, "Не удалось сохранить, попробуйте позже")
 	}
-	if err := h.Consent.PostConsent(ctx, link.PatientID, userID, kind, version, "revoke"); err != nil {
+	if err := h.Consent.PostConsent(ctx, link.PatientID, userID, kind, version, "revoke", nil); err != nil {
 		log.Printf("consent revoke user=%d patient=%d kind=%s: %v", userID, link.PatientID, kind, err)
 		return h.max.SendMessage(ctx, chatID, "Не удалось сохранить, попробуйте позже")
 	}

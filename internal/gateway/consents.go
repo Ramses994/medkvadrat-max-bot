@@ -14,6 +14,8 @@ type ConsentView struct {
 	AdsVersion      string
 	ServiceAt       string
 	AdsAt           string
+	ServiceRevision int64
+	AdsRevision     int64
 }
 
 type consentWire struct {
@@ -22,11 +24,13 @@ type consentWire struct {
 		State       string `json:"state"`
 		TextVersion string `json:"text_version"`
 		At          string `json:"at"`
+		Revision    int64  `json:"revision"`
 	} `json:"service"`
 	Ads struct {
 		State       string `json:"state"`
 		TextVersion string `json:"text_version"`
 		At          string `json:"at"`
+		Revision    int64  `json:"revision"`
 	} `json:"ads"`
 }
 
@@ -45,16 +49,21 @@ func (c *Client) GetConsent(ctx context.Context, patientID int64) (ConsentView, 
 		AdsVersion:      wire.Ads.TextVersion,
 		ServiceAt:       wire.Service.At,
 		AdsAt:           wire.Ads.At,
+		ServiceRevision: wire.Service.Revision,
+		AdsRevision:     wire.Ads.Revision,
 	}, nil
 }
 
-func (c *Client) PostConsent(ctx context.Context, patientID, maxUserID int64, kind, version, action string) error {
+func (c *Client) PostConsent(ctx context.Context, patientID, maxUserID int64, kind, version, action string, expectedRevision *int64) error {
 	body := map[string]any{
 		"patient_id":   patientID,
 		"max_user_id":  maxUserID,
 		"kind":         kind,
 		"text_version": version,
 		"action":       action,
+	}
+	if expectedRevision != nil {
+		body["expected_revision"] = *expectedRevision
 	}
 	var wire consentWire
 	return c.postJSON(ctx, "bot-consents", "/api/internal/bot-consents", body, &wire)

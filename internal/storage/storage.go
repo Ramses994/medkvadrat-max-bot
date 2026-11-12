@@ -27,8 +27,9 @@ func (u *UserLink) Verified() bool {
 }
 
 type Storage struct {
-	db         *sql.DB
-	expireFail error
+	db           *sql.DB
+	expireFail   error
+	omitRevision bool
 }
 
 func New(path string) (*Storage, error) {
@@ -112,7 +113,8 @@ func New(path string) (*Storage, error) {
 		kind TEXT NOT NULL,
 		text_version TEXT NOT NULL,
 		created_at TEXT NOT NULL,
-		used_at TEXT
+		used_at TEXT,
+		revision INTEGER
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
@@ -125,6 +127,7 @@ func New(path string) (*Storage, error) {
 	_, _ = db.Exec(`ALTER TABLE user_links ADD COLUMN verified_at TEXT`)
 	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN step TEXT NOT NULL DEFAULT 'choose'`)
 	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN selected_id INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE consent_prompts ADD COLUMN revision INTEGER`)
 
 	return &Storage{db: db}, nil
 }
