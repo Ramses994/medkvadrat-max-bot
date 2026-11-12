@@ -10,8 +10,28 @@ import (
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 )
 
+// callbackChatType reports a chat type only when MAX sent one.
+// A missing message, recipient, or chat_type is not a group chat.
+func callbackChatType(m *maxclient.Message) (string, bool) {
+	if m == nil || m.Recipient == nil || m.Recipient.ChatType == "" {
+		return "", false
+	}
+	return m.Recipient.ChatType, true
+}
+
 func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) error {
-	if u.Callback == nil || !dialogMessage(u.Message) {
+	if u == nil || u.Callback == nil {
+		return nil
+	}
+	if h.KeyboardDebug || h.ContactDebug {
+		log.Printf("message_callback shape %s", maxclient.DescribeUpdate(u))
+	}
+	if chatType, present := callbackChatType(u.Message); present && chatType != "dialog" {
+		shown := chatType
+		if shown == "" {
+			shown = "нет"
+		}
+		log.Printf("message_callback skipped chat_type=%s", shown)
 		return nil
 	}
 	cb := u.Callback

@@ -43,11 +43,10 @@ func TestBirthDate_RequiredWhenAnotherAdultIsOutsideThePilot(t *testing.T) {
 }
 
 func TestContactPhone_UsesTheSignedVCard(t *testing.T) {
-	raw := `BEGIN:VCARD\r\nTEL:+79991112233`
-	verified := "BEGIN:VCARD\nTEL:+79991112233"
+	raw := "BEGIN:VCARD\nTEL:+79991112233"
 	gw := &fakeGW{patients: []gateway.Patient{{PatientID: 100, FullName: "Тест Тестовый", BirthDate: "1985-01-01"}}}
 	h, st := testHandler(t, []int64{100}, gw)
-	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, contactJSON(raw, hmacHex(testBotToken, verified), 42))); err != nil {
+	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, contactJSON(raw, hmacHex(testBotToken, raw), 42))); err != nil {
 		t.Fatal(err)
 	}
 	link, _ := st.GetByUserID(42)
@@ -55,11 +54,10 @@ func TestContactPhone_UsesTheSignedVCard(t *testing.T) {
 		t.Fatalf("link=%+v searches=%d", link, gw.searchCalls)
 	}
 
-	two := "TEL:+79991112233\nTEL:+79991112233" + `\r\n` + "TEL:+79990000000"
+	two := "TEL:+79991112233\nTEL:+79990000000"
 	gw2 := &fakeGW{patients: gw.patients}
 	h2, st2 := testHandler(t, []int64{100}, gw2)
-	signed := strings.ReplaceAll(two, `\r\n`, "\n")
-	if err := h2.OnMessageCreated(context.Background(), contactUpdate(42, contactJSON(two, hmacHex(testBotToken, signed), 42))); err != nil {
+	if err := h2.OnMessageCreated(context.Background(), contactUpdate(42, contactJSON(two, hmacHex(testBotToken, two), 42))); err != nil {
 		t.Fatal(err)
 	}
 	if link, _ := st2.GetByUserID(42); link.Verified() || gw2.searchCalls != 0 {

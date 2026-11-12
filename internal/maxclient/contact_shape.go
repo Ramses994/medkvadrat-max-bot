@@ -24,6 +24,27 @@ func DescribeAttachments(items []Attachment) string {
 	return strings.Join(parts, "; ")
 }
 
+// DescribeUpdate lists the fields of a callback update and the types of their values.
+// chat_type is appended as its value when MAX sent one. Payload text and message ids are not included.
+func DescribeUpdate(u *Update) string {
+	if u == nil {
+		return "update=null"
+	}
+	raw, err := json.Marshal(u)
+	if err != nil {
+		return "update=other"
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "update=other"
+	}
+	shape := describeValue(v)
+	if u.Message != nil && u.Message.Recipient != nil && u.Message.Recipient.ChatType != "" {
+		shape += " chat_type=" + u.Message.Recipient.ChatType
+	}
+	return shape
+}
+
 func describeValue(v any) string {
 	switch x := v.(type) {
 	case nil:

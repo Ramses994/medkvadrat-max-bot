@@ -219,7 +219,7 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 
 	allAdults := filterAdults(h.today(), found)
 	adults := filterAllowedPatients(h.LinkAllow, allAdults)
-	log.Printf("link attempt user=%d found=%d allowed=%d", userID, len(found), len(adults))
+	log.Printf("link attempt user=%d found=%d adults=%d allowed_adults=%d", userID, len(found), len(allAdults), len(adults))
 	if len(found) == 0 {
 		h.logLink(userID, 0, "no_patient")
 		return h.max.SendMessage(ctx, chatID, contactNotFound)
