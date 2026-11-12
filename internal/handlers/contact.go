@@ -43,6 +43,10 @@ func (h *Handler) handleContact(ctx context.Context, chatID, userID int64, msg *
 	if h.ContactDebug && hashCheck != "" {
 		log.Printf("contact hash user=%d hash_check=%s", userID, hashCheck)
 	}
+	if outcome == "not_found" {
+		h.logLink(userID, 0, outcome)
+		return h.max.SendMessage(ctx, chatID, contactNotFound)
+	}
 	if outcome != "ok" {
 		h.logLink(userID, 0, outcome)
 		return h.askContact(ctx, chatID, contactNotOwn)
@@ -75,18 +79,20 @@ func contactPhone(msg *maxclient.Message, senderID int64, token string) (string,
 		if payload.MaxInfo != nil && payload.MaxInfo.UserID != senderID {
 			return "", "contact_not_own", how
 		}
-		numbers := distinctPhones(verified)
-		if len(numbers) != 1 {
-			return "", "contact_not_own", how
+		numbers, sawTEL := distinctPhones(verified)
+		if len(numbers) == 1 {
+			return numbers[0], "ok", how
 		}
-		return numbers[0], "ok", how
+		if len(numbers) == 0 && sawTEL {
+			return "", "not_found", how
+		}
+		return "", "contact_not_own", how
 	}
 	return "", "contact_not_own", ""
 }
 
-func distinctPhones(vcf string) []string {
+func distinctPhones(vcf string) (phones []string, sawTEL bool) {
 	seen := map[string]struct{}{}
-	var out []string
 	for _, line := range strings.Split(vcf, "\n") {
 		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
 		if line == "" {
@@ -96,6 +102,7 @@ func distinctPhones(vcf string) []string {
 		if !strings.HasPrefix(upper, "TEL") {
 			continue
 		}
+		sawTEL = true
 		_, value, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
@@ -108,9 +115,9 @@ func distinctPhones(vcf string) []string {
 			continue
 		}
 		seen[phone] = struct{}{}
-		out = append(out, phone)
+		phones = append(phones, phone)
 	}
-	return out
+	return phones, sawTEL
 }
 
 func filterAdults(today time.Time, patients []gateway.Patient) []gateway.Patient {

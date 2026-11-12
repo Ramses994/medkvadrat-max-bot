@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -476,20 +475,51 @@ func extractChatID(m *maxclient.Message) int64 {
 	return 0
 }
 
-var nonDigits = regexp.MustCompile(`\D`)
-
+// normalizePhone matches the cabinet rule: a leading plus is a country code,
+// and only a Russian number becomes 7XXXXXXXXXX.
 func normalizePhone(raw string) string {
-	digits := nonDigits.ReplaceAllString(raw, "")
-
-	switch {
-	case len(digits) == 11 && digits[0] == '8':
-		digits = "7" + digits[1:]
-	case len(digits) == 10:
-		digits = "7" + digits
-	}
-
-	if len(digits) != 11 || digits[0] != '7' {
+	s := strings.TrimSpace(raw)
+	if s == "" {
 		return ""
 	}
-	return digits
+	if strings.HasPrefix(s, "+") {
+		body, ok := phoneDigits(s[1:])
+		if !ok || len(body) != 11 || body[0] != '7' {
+			return ""
+		}
+		return body
+	}
+	if strings.HasPrefix(s, "00") {
+		return ""
+	}
+	body, ok := phoneDigits(s)
+	if !ok {
+		return ""
+	}
+	switch {
+	case len(body) == 11 && (body[0] == '7' || body[0] == '8'):
+		if body[0] == '8' {
+			return "7" + body[1:]
+		}
+		return body
+	case len(body) == 10:
+		return "7" + body
+	default:
+		return ""
+	}
+}
+
+func phoneDigits(s string) (string, bool) {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case ' ', '\t', '\n', '\r', '-', '(', ')', '.':
+			continue
+		}
+		if r < '0' || r > '9' {
+			return "", false
+		}
+		b.WriteRune(r)
+	}
+	return b.String(), true
 }
