@@ -46,11 +46,17 @@ func (f *fakeDueGateway) BookingByPlanningID(_ context.Context, planningID int64
 }
 
 type fakeMessenger struct {
-	sent []int64
-	err  error
+	sent   []int64
+	err    error
+	onSend func(userID int64) error
 }
 
 func (f *fakeMessenger) SendToUser(ctx context.Context, userID int64, text string, planningID int64, apptVersion string) error {
+	if f.onSend != nil {
+		if err := f.onSend(userID); err != nil {
+			return err
+		}
+	}
 	if f.err != nil {
 		return f.err
 	}
@@ -246,5 +252,44 @@ func TestRunner_RecheckErrorDoesNotSendOrMark(t *testing.T) {
 	sent, err := store.WasReminderSent(11, "d1")
 	if err != nil || sent || len(msg.sent) != 0 {
 		t.Fatalf("sent=%v marked=%v err=%v", msg.sent, sent, err)
+	}
+}
+
+func TestRunner_SecondRecipientSeesTheRevokeAfterTheFirstSendFails(t *testing.T) {
+	store, err := storage.New(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.LinkVerified(1, 6789, "79991234567", "Иванова", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LinkVerified(2, 6789, "79991234567", "Иванова", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	one := 1
+	row := gateway.DueReminder{
+		PlanningID: 11, PatientID: 6789, MessengerNotify: &one, BotConsentService: "active",
+		ApptVersion: "v1", BranchID: 106, DateConsultation: "2026-06-24 10:30",
+	}
+	revoked := false
+	gw := &fakeDueGateway{rows: []gateway.DueReminder{row}, onBooking: func(_ int64, live gateway.DueReminder) gateway.DueReminder {
+		if revoked {
+			live.BotConsentService = "revoked"
+		}
+		return live
+	}}
+	msg := &fakeMessenger{onSend: func(int64) error {
+		revoked = true
+		return errors.New("down")
+	}}
+	r := &Runner{
+		Gateway: gw, Storage: store, Messenger: msg, LinkAllowlist: []int64{6789}, Allowlist: []int64{6789},
+		Now: func() time.Time { return msk(2026, time.June, 23, 10, 30) },
+	}
+	r.Tick(context.Background())
+	marked, err := store.WasReminderSent(11, "d1")
+	if err != nil || marked || len(msg.sent) != 0 || gw.bookingCalls < 2 {
+		t.Fatalf("sent=%v marked=%v bookings=%d err=%v", msg.sent, marked, gw.bookingCalls, err)
 	}
 }

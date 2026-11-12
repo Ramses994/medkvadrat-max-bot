@@ -184,16 +184,24 @@ func (s *scriptConsent) GetConsent(context.Context, int64) (gateway.ConsentView,
 
 func (s *scriptConsent) PostConsent(_ context.Context, _, _ int64, kind, version, action string) error {
 	s.posts = append(s.posts, kind+":"+version+":"+action)
+	stamp := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
 	if action == "accept" && kind == "service" {
 		s.view.Service = "active"
 		s.view.ServiceVersion = version
+		s.view.ServiceAt = stamp
 	}
 	if action == "revoke" && kind == "service" {
 		s.view.Service = "revoked"
+		s.view.ServiceAt = stamp
 	}
 	if action == "accept" && kind == "ads" {
 		s.view.Ads = "active"
 		s.view.AdsVersion = version
+		s.view.AdsAt = stamp
+	}
+	if action == "revoke" && kind == "ads" {
+		s.view.Ads = "revoked"
+		s.view.AdsAt = stamp
 	}
 	return nil
 }

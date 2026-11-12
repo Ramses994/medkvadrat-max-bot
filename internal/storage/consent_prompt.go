@@ -72,11 +72,17 @@ func (s *Storage) MarkConsentPromptUsed(nonce string, now time.Time) (bool, erro
 	return n == 1, err
 }
 
-// ExpireConsentPrompts invalidates unused screens after a revocation.
-func (s *Storage) ExpireConsentPrompts(userID int64, kind string, now time.Time) error {
+// FailConsentExpiry makes the next expiry return err. Tests use it for a storage that cannot clear buttons.
+func (s *Storage) FailConsentExpiry(err error) { s.expireFail = err }
+
+// ExpireConsentPrompts invalidates every unused screen of this patient and kind.
+func (s *Storage) ExpireConsentPrompts(patientID int64, kind string, now time.Time) error {
+	if s.expireFail != nil {
+		return s.expireFail
+	}
 	_, err := s.db.Exec(`
 		UPDATE consent_prompts SET used_at = ?
-		WHERE user_id = ? AND kind = ? AND used_at IS NULL`,
-		now.UTC().Format(time.RFC3339), userID, kind)
+		WHERE patient_id = ? AND kind = ? AND used_at IS NULL`,
+		now.UTC().Format(time.RFC3339), patientID, kind)
 	return err
 }

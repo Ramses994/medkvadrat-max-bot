@@ -68,14 +68,14 @@ func contactPhone(msg *maxclient.Message, senderID int64, token string) (string,
 		if err := json.Unmarshal(att.Payload, &payload); err != nil {
 			return "", "contact_not_own", "fail"
 		}
-		ok, how := checkContactHash(token, payload.VcfInfo, payload.Hash)
+		ok, how, verified := checkContactHash(token, payload.VcfInfo, payload.Hash)
 		if !ok {
 			return "", "contact_not_own", how
 		}
 		if payload.MaxInfo != nil && payload.MaxInfo.UserID != senderID {
 			return "", "contact_not_own", how
 		}
-		numbers := distinctPhones(payload.VcfInfo)
+		numbers := distinctPhones(verified)
 		if len(numbers) != 1 {
 			return "", "contact_not_own", how
 		}

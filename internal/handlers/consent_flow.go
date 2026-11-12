@@ -98,6 +98,13 @@ func (h *Handler) onConsentCallback(ctx context.Context, callbackID string, user
 			log.Printf("consent read user=%d patient=%d: %v", userID, link.PatientID, err)
 			return h.max.AnswerCallback(ctx, callbackID, "Не удалось сохранить, попробуйте позже")
 		}
+		changed := view.ServiceAt
+		if prompt.Kind == "ads" {
+			changed = view.AdsAt
+		}
+		if at, perr := time.Parse(time.RFC3339, changed); perr == nil && prompt.CreatedAt.Before(at) {
+			return h.max.AnswerCallback(ctx, callbackID, consentStale)
+		}
 		already := (prompt.Kind == "service" && view.Service == "active" && view.ServiceVersion == prompt.TextVersion) ||
 			(prompt.Kind == "ads" && view.Ads == "active" && view.AdsVersion == prompt.TextVersion)
 		if !already {
@@ -167,7 +174,9 @@ func (h *Handler) revokeConsent(ctx context.Context, chatID, userID int64, kind,
 		log.Printf("consent revoke user=%d patient=%d kind=%s: %v", userID, link.PatientID, kind, err)
 		return h.max.SendMessage(ctx, chatID, "Не удалось сохранить, попробуйте позже")
 	}
-	_ = h.storage.ExpireConsentPrompts(userID, kind, h.today())
+	if err := h.storage.ExpireConsentPrompts(link.PatientID, kind, h.today()); err != nil {
+		log.Printf("consent prompts patient=%d kind=%s: %v", link.PatientID, kind, err)
+	}
 	return h.max.SendMessage(ctx, chatID, note)
 }
 

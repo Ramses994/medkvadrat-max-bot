@@ -27,7 +27,8 @@ func (u *UserLink) Verified() bool {
 }
 
 type Storage struct {
-	db *sql.DB
+	db         *sql.DB
+	expireFail error
 }
 
 func New(path string) (*Storage, error) {

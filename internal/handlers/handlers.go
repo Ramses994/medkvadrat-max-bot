@@ -217,17 +217,26 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 			"Не удалось связаться с системой клиники. Попробуйте через минуту.")
 	}
 
-	patients := filterAllowedPatients(h.LinkAllow, found)
-	log.Printf("link attempt user=%d found=%d allowed=%d", userID, len(found), len(patients))
+	allAdults := filterAdults(h.today(), found)
+	adults := filterAllowedPatients(h.LinkAllow, allAdults)
+	log.Printf("link attempt user=%d found=%d allowed=%d", userID, len(found), len(adults))
 	if len(found) == 0 {
 		h.logLink(userID, 0, "no_patient")
 		return h.max.SendMessage(ctx, chatID, contactNotFound)
 	}
+	if len(allAdults) >= 2 {
+		if len(adults) == 0 {
+			h.logLink(userID, 0, "not_allowed")
+			return h.sendTestMode(ctx, chatID)
+		}
+		return h.askWhichAdult(ctx, chatID, userID, phone, adults)
+	}
+	patients := filterAllowedPatients(h.LinkAllow, found)
 	if len(patients) == 0 {
 		h.logLink(userID, 0, "not_allowed")
 		return h.sendTestMode(ctx, chatID)
 	}
-	adults := filterAdults(h.today(), patients)
+	adults = filterAdults(h.today(), patients)
 	if len(adults) == 0 {
 		h.logLink(userID, 0, "minor_hidden")
 		return h.max.SendMessage(ctx, chatID, contactNotFound)
@@ -248,29 +257,32 @@ func (h *Handler) handleAuthentication(ctx context.Context, chatID, userID int64
 		}
 		return h.maybeConsent(ctx, chatID, userID, int64(p.PatientID))
 	default:
-		sortPatients(adults)
-		ids := make([]int64, len(adults))
-		for i, p := range adults {
-			ids[i] = int64(p.PatientID)
-		}
-		if err := h.storage.SavePendingChoice(userID, phone, ids, h.today()); err != nil {
-			return fmt.Errorf("storage.SavePendingChoice: %w", err)
-		}
-		if err := h.storage.Link(userID, 0, phone, ""); err != nil {
-			_ = h.storage.DeletePendingChoice(userID)
-			return fmt.Errorf("storage.Link pending: %w", err)
-		}
-
-		var b strings.Builder
-		b.WriteString("По этому номеру зарегистрировано несколько пациентов.\n")
-		b.WriteString("Отправьте цифру, чтобы выбрать свой профиль:\n\n")
-		for i, p := range adults {
-			b.WriteString(fmt.Sprintf("%d. %s\n", i+1, profileLabel(p.FullName, p.BirthDate)))
-		}
-		b.WriteString("\n(Если вы хотите подтвердить другой номер, нажмите «Сменить номер»).")
-		h.logLink(userID, 0, "several")
-		return h.max.SendMessage(ctx, chatID, b.String())
+		return h.askWhichAdult(ctx, chatID, userID, phone, adults)
 	}
+}
+
+func (h *Handler) askWhichAdult(ctx context.Context, chatID, userID int64, phone string, adults []gateway.Patient) error {
+	sortPatients(adults)
+	ids := make([]int64, len(adults))
+	for i, p := range adults {
+		ids[i] = int64(p.PatientID)
+	}
+	if err := h.storage.SavePendingChoice(userID, phone, ids, h.today()); err != nil {
+		return fmt.Errorf("storage.SavePendingChoice: %w", err)
+	}
+	if err := h.storage.Link(userID, 0, phone, ""); err != nil {
+		_ = h.storage.DeletePendingChoice(userID)
+		return fmt.Errorf("storage.Link pending: %w", err)
+	}
+	var b strings.Builder
+	b.WriteString("По этому номеру зарегистрировано несколько пациентов.\n")
+	b.WriteString("Отправьте цифру, чтобы выбрать свой профиль:\n\n")
+	for i, p := range adults {
+		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, profileLabel(p.FullName, p.BirthDate)))
+	}
+	b.WriteString("\n(Если вы хотите подтвердить другой номер, нажмите «Сменить номер»).")
+	h.logLink(userID, 0, "several")
+	return h.max.SendMessage(ctx, chatID, b.String())
 }
 
 func sortPatients(ps []gateway.Patient) {

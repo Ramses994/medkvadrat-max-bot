@@ -117,16 +117,6 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		if sent {
 			continue
 		}
-		live, err := r.Gateway.BookingByPlanningID(ctx, appt.PlanningID)
-		if err != nil {
-			log.Printf("reminders: recheck planning=%d: %v", appt.PlanningID, err)
-			continue
-		}
-		if live.Cancelled || live.Status != 0 || live.PatientID != appt.PatientID || live.ApptVersion != appt.ApptVersion ||
-			!CanNotify(live.MessengerNotify, live.BotConsentService, live.NoSMSNotify, live.IsWaitlist) {
-			log.Printf("skip planning=%d reason=recheck", appt.PlanningID)
-			continue
-		}
 
 		var delivered bool
 		for _, u := range users {
@@ -136,6 +126,16 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 				continue
 			}
 			if !linked {
+				continue
+			}
+			live, err := r.Gateway.BookingByPlanningID(ctx, appt.PlanningID)
+			if err != nil {
+				log.Printf("reminders: recheck planning=%d user=%d: %v", appt.PlanningID, u.UserID, err)
+				continue
+			}
+			if live.Cancelled || live.Status != 0 || live.PatientID != appt.PatientID || live.ApptVersion != appt.ApptVersion ||
+				!CanNotify(live.MessengerNotify, live.BotConsentService, live.NoSMSNotify, live.IsWaitlist) {
+				log.Printf("skip planning=%d user=%d reason=recheck", appt.PlanningID, u.UserID)
 				continue
 			}
 			if err := r.Messenger.SendToUser(ctx, u.UserID, text, appt.PlanningID, appt.ApptVersion); err != nil {

@@ -20,7 +20,7 @@ func TestContactHash_AcceptsHexAndBase64OfTheSameDigest(t *testing.T) {
 		base64.StdEncoding.EncodeToString(sum),
 		base64.URLEncoding.EncodeToString(sum),
 	} {
-		ok, how := checkContactHash(token, vcf, hash)
+		ok, how, _ := checkContactHash(token, vcf, hash)
 		if !ok || how == "fail" || how == "missing" {
 			t.Fatalf("hash %q → ok=%v %s", hash, ok, how)
 		}
@@ -28,7 +28,7 @@ func TestContactHash_AcceptsHexAndBase64OfTheSameDigest(t *testing.T) {
 	literal := `BEGIN:VCARD\r\nTEL:+79991112233`
 	mac = hmac.New(sha256.New, []byte(token))
 	mac.Write([]byte("BEGIN:VCARD\nTEL:+79991112233"))
-	ok, how := checkContactHash(token, literal, hex.EncodeToString(mac.Sum(nil)))
+	ok, how, _ := checkContactHash(token, literal, hex.EncodeToString(mac.Sum(nil)))
 	if !ok || how != "hex lf" {
 		t.Fatalf("literal newline ok=%v %s", ok, how)
 	}
