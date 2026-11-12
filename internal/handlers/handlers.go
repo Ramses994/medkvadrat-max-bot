@@ -89,9 +89,6 @@ func (h *Handler) OnMessageCreated(ctx context.Context, u *maxclient.Update) err
 	userID := u.Message.Sender.UserID
 	chatID := extractChatID(u.Message)
 
-	if h.ContactDebug && len(u.Message.Body.Attachments) > 0 {
-		log.Printf("contact shape user=%d %s", userID, maxclient.DescribeAttachments(u.Message.Body.Attachments))
-	}
 	if hasContact(u.Message) {
 		return h.handleContact(ctx, chatID, userID, u.Message)
 	}

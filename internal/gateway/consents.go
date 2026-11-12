@@ -11,6 +11,7 @@ type ConsentView struct {
 	Service         string
 	Ads             string
 	ServiceVersion  string
+	AdsVersion      string
 }
 
 type consentWire struct {
@@ -20,7 +21,8 @@ type consentWire struct {
 		TextVersion string `json:"text_version"`
 	} `json:"service"`
 	Ads struct {
-		State string `json:"state"`
+		State       string `json:"state"`
+		TextVersion string `json:"text_version"`
 	} `json:"ads"`
 }
 
@@ -36,6 +38,7 @@ func (c *Client) GetConsent(ctx context.Context, patientID int64) (ConsentView, 
 		Service:         wire.Service.State,
 		Ads:             wire.Ads.State,
 		ServiceVersion:  wire.Service.TextVersion,
+		AdsVersion:      wire.Ads.TextVersion,
 	}, nil
 }
 

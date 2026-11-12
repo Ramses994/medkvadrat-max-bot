@@ -124,3 +124,22 @@ func TestCallback_AlreadyAnsweredStillClearsKeyboard(t *testing.T) {
 		t.Fatalf("replaced=%q", fm.replaced)
 	}
 }
+
+func TestCallback_UnverifiedAsksForTheContactButton(t *testing.T) {
+	st, err := storage.New(t.TempDir() + "/b.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fm := &fakeMax{}
+	h := &Handler{max: fm, gateway: &scriptGW{}, storage: st}
+	u := &maxclient.Update{
+		Callback: &maxclient.Callback{CallbackID: "cb1", Payload: "decline:10", User: &maxclient.User{UserID: 7}},
+	}
+	if err := h.OnMessageCallback(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	if len(fm.answers) != 1 || fm.answers[0] != "Подтвердите номер кнопкой „Поделиться контактом“" {
+		t.Fatalf("answers=%v", fm.answers)
+	}
+}

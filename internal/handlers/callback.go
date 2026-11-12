@@ -54,7 +54,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		return answer("Произошла ошибка, попробуйте позже")
 	}
 	if !link.Verified() {
-		return answer("Профиль не найден, отправьте номер телефона")
+		return answer("Подтвердите номер кнопкой „Поделиться контактом“")
 	}
 
 	answerText := func(status string) string {

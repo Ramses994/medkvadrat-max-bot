@@ -15,8 +15,16 @@ import (
 
 type fakeMax struct {
 	messages     []string
+	answers      []string
 	replaced     string
 	notification string
+	keyboards    []keyboardSend
+}
+
+type keyboardSend struct {
+	recipient int64
+	byUser    bool
+	text      string
 }
 
 func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
@@ -24,7 +32,10 @@ func (f *fakeMax) SendMessage(_ context.Context, _ int64, text string) error {
 	return nil
 }
 
-func (f *fakeMax) AnswerCallback(context.Context, string, string) error { return nil }
+func (f *fakeMax) AnswerCallback(_ context.Context, _, text string) error {
+	f.answers = append(f.answers, text)
+	return nil
+}
 
 func (f *fakeMax) AnswerCallbackReplace(_ context.Context, _, notification, text string) error {
 	f.notification = notification
@@ -32,8 +43,9 @@ func (f *fakeMax) AnswerCallbackReplace(_ context.Context, _, notification, text
 	return nil
 }
 
-func (f *fakeMax) SendMessageWithKeyboard(_ context.Context, _ int64, _ bool, text string, _ [][]maxclient.CallbackButton) error {
+func (f *fakeMax) SendMessageWithKeyboard(_ context.Context, recipient int64, byUser bool, text string, _ [][]maxclient.CallbackButton) error {
 	f.messages = append(f.messages, text)
+	f.keyboards = append(f.keyboards, keyboardSend{recipient: recipient, byUser: byUser, text: text})
 	return nil
 }
 

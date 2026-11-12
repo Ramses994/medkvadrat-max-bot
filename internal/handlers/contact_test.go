@@ -44,6 +44,9 @@ func TestContact_OwnContactLinksAndOtherIsRefused(t *testing.T) {
 	if strings.Contains(logs.String(), "79991112233") || strings.Contains(logs.String(), "Иванов") {
 		t.Fatalf("log leaked %s", logs.String())
 	}
+	if strings.Count(logs.String(), "contact shape") != 1 {
+		t.Fatalf("shape log count=%d %s", strings.Count(logs.String(), "contact shape"), logs.String())
+	}
 
 	other := `{"vcf_info":"TEL:+79990000000","max_info":{"user_id":99}}`
 	if err := h.OnMessageCreated(context.Background(), contactUpdate(42, other)); err != nil {
@@ -156,7 +159,23 @@ func (s *scriptConsent) PostConsent(_ context.Context, _, _ int64, kind, version
 	if action == "revoke" && kind == "service" {
 		s.view.Service = "revoked"
 	}
+	if action == "accept" && kind == "ads" {
+		s.view.Ads = "active"
+		s.view.AdsVersion = version
+	}
 	return nil
+}
+
+func (s *scriptConsent) DueReminders(context.Context, time.Time, time.Time, []int64) ([]gateway.DueReminder, error) {
+	return []gateway.DueReminder{{
+		PlanningID:        11,
+		PatientID:         100,
+		DoctorName:        "Смирнов",
+		MessengerNotify:   s.view.MessengerNotify,
+		BotConsentService: s.view.Service,
+		BranchID:          106,
+		DateConsultation:  "2026-06-24 10:30",
+	}}, nil
 }
 
 func TestConsentScreen_OnlyWhenMissingAndAcceptIsOnce(t *testing.T) {
@@ -211,7 +230,7 @@ func TestConsentAccept_PostsVersionOnceAndRevokeBeatsQuestionnaire(t *testing.T)
 	press := func() {
 		t.Helper()
 		err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
-			CallbackID: "cb", Payload: "consent:service:accept", User: &maxclient.User{UserID: 42},
+			CallbackID: "cb", Payload: "consent:service:accept:100", User: &maxclient.User{UserID: 42},
 		}})
 		if err != nil {
 			t.Fatal(err)
@@ -235,5 +254,183 @@ func TestConsentAccept_PostsVersionOnceAndRevokeBeatsQuestionnaire(t *testing.T)
 	}
 	if reminders.CanNotify(&one, cons.view.Service, false, false) {
 		t.Fatal("revocation must beat the questionnaire")
+	}
+}
+
+func TestDisableNotifications_RecordsRevokeAndSkipsTheNextReminder(t *testing.T) {
+	gw := &fakeGW{}
+	h, st := testHandler(t, []int64{100}, gw)
+	if err := st.LinkVerified(42, 100, "79991112233", "Иванов Иван", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	one := 1
+	cons := &scriptConsent{view: gateway.ConsentView{MessengerNotify: &one, Service: "none"}}
+	h.Consent = cons
+	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
+		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Body: &maxclient.MessageBody{Text: "Отключить уведомления"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons.posts) != 1 || cons.posts[0] != "service:service-v1:revoke" || cons.view.Service != "revoked" {
+		t.Fatalf("recorded=%+v posts=%v", cons.view, cons.posts)
+	}
+	sent := &sentUsers{}
+	runner := &reminders.Runner{
+		Gateway: cons, Storage: st, Messenger: sent,
+		Allowlist: []int64{100}, LinkAllowlist: []int64{100},
+		Now: func() time.Time {
+			return time.Date(2026, time.June, 23, 10, 30, 0, 0, reminders.MoscowLocation())
+		},
+	}
+	runner.Tick(context.Background())
+	if len(sent.ids) != 0 {
+		t.Fatalf("revoked reminder was sent to %v", sent.ids)
+	}
+}
+
+type sentUsers struct{ ids []int64 }
+
+func (s *sentUsers) SendToUser(context.Context, int64, string, int64, string) error {
+	s.ids = append(s.ids, 42)
+	return nil
+}
+
+func TestEnableNotifications_FlagOffHidesTheDraft(t *testing.T) {
+	h, st := testHandler(t, []int64{100}, &fakeGW{})
+	if err := st.LinkVerified(42, 100, "79991112233", "Иванов Иван", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	zero := 0
+	cons := &scriptConsent{view: gateway.ConsentView{MessengerNotify: &zero, Service: "none"}}
+	h.Consent = cons
+	h.ConsentEnabled = false
+	say := func(text string) {
+		t.Helper()
+		err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
+			Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+			Body: &maxclient.MessageBody{Text: text},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	say("Включить уведомления")
+	fm := h.max.(*fakeMax)
+	if !strings.Contains(fm.messages[len(fm.messages)-1], "обратитесь в регистратуру") {
+		t.Fatalf("questionnaire 0: %q", fm.messages[len(fm.messages)-1])
+	}
+	cons.view.MessengerNotify = nil
+	say("Включить уведомления")
+	last := fm.messages[len(fm.messages)-1]
+	if strings.Contains(last, "[") || !strings.Contains(last, "пока нельзя") {
+		t.Fatalf("flag off: %q", last)
+	}
+	err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
+		CallbackID: "cb", Payload: "consent:service:accept:100", User: &maxclient.User{UserID: 42},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cons.posts) != 0 || len(fm.answers) == 0 || fm.answers[len(fm.answers)-1] != "Сейчас это недоступно" {
+		t.Fatalf("posts=%v answers=%v", cons.posts, fm.answers)
+	}
+}
+
+func TestAdsConsent_GoesToTheUser(t *testing.T) {
+	h, st := testHandler(t, []int64{100}, &fakeGW{})
+	if err := st.LinkVerified(42, 100, "79991112233", "Иванов Иван", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	h.Consent = &scriptConsent{view: gateway.ConsentView{Service: "none"}}
+	h.ConsentEnabled = true
+	h.AdsEnabled = true
+	h.ServiceVersion = "service-v1"
+	err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
+		CallbackID: "cb", Payload: "consent:service:accept:100", User: &maxclient.User{UserID: 42},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := h.max.(*fakeMax)
+	if len(fm.keyboards) != 1 || !fm.keyboards[0].byUser || fm.keyboards[0].recipient != 42 {
+		t.Fatalf("keyboards=%+v", fm.keyboards)
+	}
+}
+
+func TestConsentCallback_RefusesAnotherProfileAndOldPayload(t *testing.T) {
+	h, st := testHandler(t, []int64{100}, &fakeGW{})
+	if err := st.LinkVerified(42, 100, "79991112233", "Иванов Иван", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cons := &scriptConsent{view: gateway.ConsentView{Service: "none"}}
+	h.Consent = cons
+	h.ConsentEnabled = true
+	press := func(payload string) {
+		t.Helper()
+		err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
+			CallbackID: "cb", Payload: payload, User: &maxclient.User{UserID: 42},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	press("consent:service:accept:999")
+	press("consent:service:accept")
+	fm := h.max.(*fakeMax)
+	if len(cons.posts) != 0 || len(fm.answers) != 2 {
+		t.Fatalf("posts=%v answers=%v", cons.posts, fm.answers)
+	}
+	if fm.answers[0] != "Это согласие относится к другому профилю" || fm.answers[1] != "Не удалось обработать нажатие" {
+		t.Fatalf("answers=%v", fm.answers)
+	}
+}
+
+func TestDisableNotifications_WithoutAPI_DoesNotClaimSuccess(t *testing.T) {
+	h, st := testHandler(t, []int64{100}, &fakeGW{})
+	if err := st.LinkVerified(42, 100, "79991112233", "Иванов Иван", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	err := h.OnMessageCreated(context.Background(), &maxclient.Update{Message: &maxclient.Message{
+		Sender: &maxclient.User{UserID: 42}, Recipient: &maxclient.Recipient{ChatID: 1},
+		Body: &maxclient.MessageBody{Text: "Отключить уведомления"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := h.max.(*fakeMax)
+	last := fm.messages[len(fm.messages)-1]
+	if last != "Не удалось сохранить, попробуйте позже" || strings.Contains(last, "отключены") {
+		t.Fatalf("msg=%q", last)
+	}
+}
+
+func TestAdsAccept_RequiresTheSameVersion(t *testing.T) {
+	h, st := testHandler(t, []int64{100}, &fakeGW{})
+	if err := st.LinkVerified(42, 100, "79991112233", "Иванов Иван", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cons := &scriptConsent{view: gateway.ConsentView{Ads: "active", AdsVersion: "ads-v1"}}
+	h.Consent = cons
+	h.AdsEnabled = true
+	h.AdsVersion = "ads-v1"
+	press := func() {
+		t.Helper()
+		err := h.OnMessageCallback(context.Background(), &maxclient.Update{Callback: &maxclient.Callback{
+			CallbackID: "cb", Payload: "consent:ads:accept:100", User: &maxclient.User{UserID: 42},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	press()
+	if len(cons.posts) != 0 {
+		t.Fatalf("same version posted %v", cons.posts)
+	}
+	h.AdsVersion = "ads-v2"
+	press()
+	if len(cons.posts) != 1 || cons.posts[0] != "ads:ads-v2:accept" {
+		t.Fatalf("posts=%v", cons.posts)
 	}
 }
