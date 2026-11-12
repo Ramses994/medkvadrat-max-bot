@@ -66,20 +66,21 @@ type LabPanel struct {
 }
 
 type DueReminder struct {
-	PlanningID       int64  `json:"planning_id"`
-	PatientID        int64  `json:"patient_id"`
-	PatientPhone     string `json:"patient_phone"`
-	PatientName      string `json:"patient_name"`
-	DoctorName       string `json:"doctor_name"`
-	Service          string `json:"service"`
-	IsWaitlist       bool   `json:"is_waitlist"`
-	MessengerNotify  *int   `json:"messenger_notify"`
-	NoSMSNotify      bool   `json:"no_sms_notify"`
-	ApptVersion      string `json:"appt_version"`
-	BranchID         int    `json:"branch_id"`
-	BranchCode       string `json:"branch_code"`
-	DateConsultation string `json:"date_consultation"`
-	Status           int    `json:"status"`
+	PlanningID        int64  `json:"planning_id"`
+	PatientID         int64  `json:"patient_id"`
+	PatientPhone      string `json:"patient_phone"`
+	PatientName       string `json:"patient_name"`
+	DoctorName        string `json:"doctor_name"`
+	Service           string `json:"service"`
+	IsWaitlist        bool   `json:"is_waitlist"`
+	MessengerNotify   *int   `json:"messenger_notify"`
+	BotConsentService string `json:"bot_consent_service"`
+	NoSMSNotify       bool   `json:"no_sms_notify"`
+	ApptVersion       string `json:"appt_version"`
+	BranchID          int    `json:"branch_id"`
+	BranchCode        string `json:"branch_code"`
+	DateConsultation  string `json:"date_consultation"`
+	Status            int    `json:"status"`
 }
 
 type NewBooking struct {
@@ -98,9 +99,9 @@ type BookingCursor struct {
 }
 
 type NewBookingsPage struct {
-	Items      []NewBooking    `json:"items"`
-	NextCursor *BookingCursor  `json:"next_cursor"`
-	HasMore    bool            `json:"has_more"`
+	Items      []NewBooking   `json:"items"`
+	NextCursor *BookingCursor `json:"next_cursor"`
+	HasMore    bool           `json:"has_more"`
 }
 
 // ===== Методы =====

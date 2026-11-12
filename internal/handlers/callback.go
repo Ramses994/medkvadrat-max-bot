@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/apptconfirm"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
@@ -14,6 +15,13 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		return nil
 	}
 	cb := u.Callback
+	if strings.HasPrefix(cb.Payload, "consent:") {
+		var userID int64
+		if cb.User != nil {
+			userID = cb.User.UserID
+		}
+		return h.onConsentCallback(ctx, cb.CallbackID, userID, cb.Payload)
+	}
 	callbackID := cb.CallbackID
 	answer := func(text string) error {
 		return h.max.AnswerCallback(ctx, callbackID, text)
@@ -45,7 +53,7 @@ func (h *Handler) OnMessageCallback(ctx context.Context, u *maxclient.Update) er
 		log.Printf("message_callback storage user_id=%d: %v", userID, err)
 		return answer("Произошла ошибка, попробуйте позже")
 	}
-	if link == nil {
+	if !link.Verified() {
 		return answer("Профиль не найден, отправьте номер телефона")
 	}
 

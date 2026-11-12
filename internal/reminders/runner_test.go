@@ -11,9 +11,9 @@ import (
 )
 
 type fakeDueGateway struct {
-	err        error
-	rows       []gateway.DueReminder
-	calls      int
+	err          error
+	rows         []gateway.DueReminder
+	calls        int
 	lastPatients []int64
 }
 
@@ -45,7 +45,7 @@ func TestRunner_Tick_GatewayErrorDoesNotPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_ = store.Link(42, 6789, "79991234567", "Иванова")
+	_ = store.LinkVerified(42, 6789, "79991234567", "Иванова", time.Now())
 
 	gw := &fakeDueGateway{err: errors.New("gateway down")}
 	msg := &fakeMessenger{}
@@ -71,7 +71,7 @@ func TestRunner_Tick_NoDuplicateAfterMark(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.Link(42, 6789, "79991234567", "Иванова"); err != nil {
+	if err := store.LinkVerified(42, 6789, "79991234567", "Иванова", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,7 +109,7 @@ func TestRunner_Tick_WaitlistSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.Link(42, 6789, "79991234567", "Иванова"); err != nil {
+	if err := store.LinkVerified(42, 6789, "79991234567", "Иванова", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	now := msk(2026, time.June, 23, 10, 30)
@@ -140,20 +140,20 @@ func TestRunner_Tick_AllowlistSkipsUnlistedPatient(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_ = store.Link(42, 6789, "79991234567", "Иванова")
-	_ = store.Link(43, 9999, "79990000000", "Другой")
+	_ = store.LinkVerified(42, 6789, "79991234567", "Иванова", time.Now())
+	_ = store.LinkVerified(43, 9999, "79990000000", "Другой", time.Now())
 
 	_ = store.Link(44, 0, "79990000001", "pending_selection")
 
 	gw := &fakeDueGateway{}
 	msg := &fakeMessenger{}
 	r := &Runner{
-		Gateway:   gw,
-		Storage:   store,
-		Messenger: msg,
+		Gateway:       gw,
+		Storage:       store,
+		Messenger:     msg,
 		Allowlist:     []int64{6789},
-		LinkAllowlist:  []int64{6789},
-		Now:       func() time.Time { return msk(2026, time.June, 23, 10, 30) },
+		LinkAllowlist: []int64{6789},
+		Now:           func() time.Time { return msk(2026, time.June, 23, 10, 30) },
 	}
 	r.Tick(context.Background())
 	if len(gw.lastPatients) != 1 || gw.lastPatients[0] != 6789 {

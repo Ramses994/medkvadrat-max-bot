@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/config"
+	"github.com/medkvadrat/medkvadrat-max-bot/internal/consenttext"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/gateway"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/handlers"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/linkallow"
@@ -23,6 +24,10 @@ func main() {
 		log.Fatalf("Ошибка загрузки конфига: %v", err)
 	}
 
+	if err := consenttext.Check(cfg.ConsentEnabled, cfg.ConsentAdsEnabled, cfg.ConsentServiceVersion, cfg.ConsentAdsVersion); err != nil {
+		log.Fatalf("Согласия: %v", err)
+	}
+
 	store, err := storage.New(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("Ошибка инициализации БД: %v", err)
@@ -31,8 +36,13 @@ func main() {
 	log.Printf("SQLite инициализирована: %s", cfg.DBPath)
 
 	linkAllow := linkallow.New(cfg.BotLinkAllowlistPatients)
-	log.Printf("link allowlist: %d patients", len(linkAllow))
-	if len(linkAllow) == 0 {
+	if cfg.BotLinkAllowAll {
+		linkAllow = linkallow.Everyone()
+		log.Printf("link allowlist: everyone")
+	} else {
+		log.Printf("link allowlist: %d patients", len(linkAllow.IDs()))
+	}
+	if linkAllow.Empty() {
 		log.Printf("WARNING: BOT_LINK_ALLOWLIST_PATIENTS is empty — linking disabled for everyone")
 	}
 	if n, err := store.PurgeLinksOutsideAllowlist(linkAllow); err != nil {
@@ -59,6 +69,12 @@ func main() {
 	h := handlers.New(mc, gw, store)
 	h.LinkAllow = linkAllow
 	h.KeyboardDebug = cfg.KeyboardDebug
+	h.ContactDebug = cfg.ContactDebug
+	h.Consent = gw
+	h.ConsentEnabled = cfg.ConsentEnabled
+	h.AdsEnabled = cfg.ConsentAdsEnabled
+	h.ServiceVersion = cfg.ConsentServiceVersion
+	h.AdsVersion = cfg.ConsentAdsVersion
 	if cfg.KeyboardDebug {
 		log.Println("KEYBOARD_DEBUG=true: /start и «тест-кнопки» шлют demo-клавиатуру")
 	}
@@ -68,11 +84,12 @@ func main() {
 	}
 	if cfg.ReminderEnabled {
 		runner := &reminders.Runner{
-			Gateway:   gw,
-			Storage:   store,
-			Messenger: reminders.NewMaxMessenger(mc),
+			Gateway:       gw,
+			Storage:       store,
+			Messenger:     reminders.NewMaxMessenger(mc),
 			Allowlist:     cfg.ReminderAllowlistPatients,
 			LinkAllowlist: cfg.BotLinkAllowlistPatients,
+			LinkAllowAll:  cfg.BotLinkAllowAll,
 		}
 		go reminders.Start(ctx, cfg.ReminderTick, runner)
 		log.Printf("Планировщик напоминаний запущен (тик %s)", cfg.ReminderTick)
@@ -89,6 +106,7 @@ func main() {
 			Storage:       store,
 			Sender:        textSender{mc},
 			LinkAllow:     cfg.BotLinkAllowlistPatients,
+			LinkAllowAll:  cfg.BotLinkAllowAll,
 			ReminderAllow: cfg.ReminderAllowlistPatients,
 		})
 		log.Println("Уведомления о новых записях включены (тик 60s)")

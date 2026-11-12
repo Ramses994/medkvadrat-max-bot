@@ -17,8 +17,8 @@ func TestR1_SecondLinkedUserReceives(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000001", "A")
-	_ = st.Link(2, 100, "79990000002", "B")
+	_ = st.LinkVerified(1, 100, "79990000001", "A", time.Now())
+	_ = st.LinkVerified(2, 100, "79990000002", "B", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	row := consentRow(70, 100)
 	err = st.EnqueueNoticesAndCursor([]storage.OutboxItem{{
@@ -44,8 +44,8 @@ func TestR1_RecipientUnlinkedOtherRemains(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000001", "A")
-	_ = st.Link(2, 100, "79990000002", "B")
+	_ = st.LinkVerified(1, 100, "79990000001", "A", time.Now())
+	_ = st.LinkVerified(2, 100, "79990000002", "B", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	row := consentRow(71, 100)
 	err = st.EnqueueNoticesAndCursor([]storage.OutboxItem{{
@@ -76,7 +76,7 @@ func TestR1_LinkReadErrorIsRetryNotDrop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	row := consentRow(72, 100)
 	seedPending(t, st, row, now)
@@ -106,7 +106,7 @@ func TestR2_HealthyItemAfterHundred503(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	live := map[int64]gateway.BookingSnapshot{}
 	items := make([]storage.OutboxItem, 0, 101)

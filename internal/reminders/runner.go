@@ -25,12 +25,13 @@ type DueGateway interface {
 }
 
 type Runner struct {
-	Gateway   DueGateway
-	Storage   *storage.Storage
-	Messenger Messenger
+	Gateway       DueGateway
+	Storage       *storage.Storage
+	Messenger     Messenger
 	Allowlist     []int64
 	LinkAllowlist []int64
-	Now       func() time.Time
+	LinkAllowAll  bool
+	Now           func() time.Time
 }
 
 func (r *Runner) now() time.Time {
@@ -51,7 +52,11 @@ func (r *Runner) Tick(ctx context.Context) {
 		log.Printf("reminders: DistinctPatientIDs: %v", err)
 		return
 	}
-	targetPatients := ReminderAudience(linked, r.LinkAllowlist, r.Allowlist)
+	linkAllow := r.LinkAllowlist
+	if r.LinkAllowAll {
+		linkAllow = linked
+	}
+	targetPatients := ReminderAudience(linked, linkAllow, r.Allowlist)
 	if len(targetPatients) == 0 {
 		return
 	}
@@ -95,7 +100,7 @@ func (r *Runner) processOne(ctx context.Context, appt *gateway.DueReminder, now 
 		return
 	}
 
-	if !CanNotify(appt.MessengerNotify, appt.NoSMSNotify, appt.IsWaitlist, false) {
+	if !CanNotify(appt.MessengerNotify, appt.BotConsentService, appt.NoSMSNotify, appt.IsWaitlist) {
 		log.Printf("skip planning=%d reason=consent", appt.PlanningID)
 		return
 	}

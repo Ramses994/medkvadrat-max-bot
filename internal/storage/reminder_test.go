@@ -1,6 +1,9 @@
 package storage
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestReminderLog_Idempotent(t *testing.T) {
 	s, err := New(":memory:")
@@ -50,10 +53,13 @@ func TestUsersByPatientID(t *testing.T) {
 	}
 	defer s.Close()
 
-	if err := s.Link(100, 5001, "79991111111", "Анна"); err != nil {
+	if err := s.LinkVerified(100, 5001, "79991111111", "Анна", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Link(101, 5001, "79992222222", "Мама Анны"); err != nil {
+	if err := s.LinkVerified(101, 5001, "79992222222", "Мама Анны", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Link(102, 5001, "79993333333", "Старая"); err != nil {
 		t.Fatal(err)
 	}
 

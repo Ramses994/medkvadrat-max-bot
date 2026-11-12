@@ -89,7 +89,7 @@ func TestFirstTickDoesNotSendHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	gw := &fakeGW{pages: []gateway.NewBookingsPage{{Items: []gateway.NewBooking{consentRow(1, 100)}}}}
 	r := &Runner{
 		Gateway: gw, Storage: st, Sender: &fakeSend{},
@@ -108,7 +108,7 @@ func TestRetryThenSuccessAndEmptyAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	_ = st.Link(2, 0, "79991111111", "pending")
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	cur, _ := storage.EncodeCursor("2026-06-23 10:00:00.000", 0)
@@ -160,7 +160,7 @@ func TestAudienceOver500Skipped(t *testing.T) {
 	for i := range allow {
 		id := int64(i + 1)
 		allow[i] = id
-		_ = st.Link(id, id, "79990000000", "A")
+		_ = st.LinkVerified(id, id, "79990000000", "A", time.Now())
 	}
 	gw := &fakeGW{}
 	r := &Runner{
@@ -182,7 +182,7 @@ func TestPaginationTwoHundredOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	cur, _ := storage.EncodeCursor("2026-06-23 10:00:00.000", 0)
 	_ = st.SetKV(storage.BookingNoticeCursorKey, cur)
@@ -211,7 +211,7 @@ func TestWaitlistNoticeDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	cur, _ := storage.EncodeCursor("2026-06-23 10:00:00.000", 0)
 	_ = st.SetKV(storage.BookingNoticeCursorKey, cur)
@@ -286,7 +286,7 @@ func TestOutboxRecheckDrops(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer st.Close()
-			_ = st.Link(1, 100, "79990000000", "A")
+			_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 			row := consentRow(40, 100)
 			seedPending(t, st, row, now)
 			gw := &fakeGW{}
@@ -318,7 +318,7 @@ func TestOutboxTooLateDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	now := time.Date(2026, 6, 26, 18, 0, 0, 0, reminders.MoscowLocation())
 	row := consentRow(50, 100)
 	row.DateConsultation = "2026-06-26 19:30"
@@ -342,7 +342,7 @@ func TestOutboxEightFailuresDropped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(1, 100, "79990000000", "A")
+	_ = st.LinkVerified(1, 100, "79990000000", "A", time.Now())
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, reminders.MoscowLocation())
 	row := consentRow(60, 100)
 	seedPending(t, st, row, now)

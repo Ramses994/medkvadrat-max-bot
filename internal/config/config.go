@@ -19,8 +19,14 @@ type Config struct {
 	ReminderTick              time.Duration
 	ReminderAllowlistPatients []int64
 	BotLinkAllowlistPatients  []int64
+	BotLinkAllowAll           bool
 	KeyboardDebug             bool
 	BookingNoticeEnabled      bool
+	ConsentEnabled            bool
+	ConsentAdsEnabled         bool
+	ConsentServiceVersion     string
+	ConsentAdsVersion         string
+	ContactDebug              bool
 }
 
 func Load() (*Config, error) {
@@ -53,9 +59,19 @@ func Load() (*Config, error) {
 	}
 	cfg.ReminderTick = tick
 	cfg.ReminderAllowlistPatients = parseCSVInt64s(os.Getenv("REMINDER_ALLOWLIST_PATIENTS"))
-	cfg.BotLinkAllowlistPatients = parseCSVInt64s(os.Getenv("BOT_LINK_ALLOWLIST_PATIENTS"))
+	linkRaw := strings.TrimSpace(os.Getenv("BOT_LINK_ALLOWLIST_PATIENTS"))
+	if linkRaw == "*" {
+		cfg.BotLinkAllowAll = true
+	} else {
+		cfg.BotLinkAllowlistPatients = parseCSVInt64s(linkRaw)
+	}
 	cfg.KeyboardDebug = envBoolDefaultFalse("KEYBOARD_DEBUG", false)
 	cfg.BookingNoticeEnabled = envBoolDefaultFalse("BOOKING_NOTICE_ENABLED", false)
+	cfg.ConsentEnabled = envBoolDefaultFalse("BOT_CONSENT_ENABLED", false)
+	cfg.ConsentAdsEnabled = envBoolDefaultFalse("BOT_CONSENT_ADS_ENABLED", false)
+	cfg.ConsentServiceVersion = envDefault("BOT_CONSENT_SERVICE_VERSION", "service-v1")
+	cfg.ConsentAdsVersion = envDefault("BOT_CONSENT_ADS_VERSION", "ads-v1")
+	cfg.ContactDebug = envBoolDefaultFalse("MAX_CONTACT_DEBUG", false)
 
 	return cfg, nil
 }
@@ -82,6 +98,14 @@ func parseCSVInt64s(raw string) []int64 {
 		return nil
 	}
 	return out
+}
+
+func envDefault(key, def string) string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func envBoolDefaultTrue(key string, def bool) bool {

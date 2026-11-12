@@ -1,15 +1,19 @@
 package reminders
 
-// CanNotify is the single gate before any reminder or booking-notice send.
-// Until LK-1e, only Medialog DATA_W3_RASSYLKA.MESSENGER_NOTIFY=1 counts.
-// hasBotConsent is reserved for a later bot-side consent that is not yet stored.
-func CanNotify(messengerNotify *int, noSMS, isWaitlist, hasBotConsent bool) bool {
+// CanNotify is the only gate before a reminder or a «Вы записаны» notice.
+// A bot revocation beats the questionnaire. Direct answers do not use this.
+func CanNotify(messengerNotify *int, consentService string, noSMS, isWaitlist bool) bool {
 	if noSMS || isWaitlist {
+		return false
+	}
+	if consentService == "revoked" {
 		return false
 	}
 	if messengerNotify != nil && *messengerNotify == 1 {
 		return true
 	}
-	_ = hasBotConsent
-	return false
+	if messengerNotify != nil && *messengerNotify == 0 {
+		return false
+	}
+	return consentService == "active"
 }

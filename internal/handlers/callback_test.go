@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/maxclient"
 	"github.com/medkvadrat/medkvadrat-max-bot/internal/storage"
@@ -26,7 +27,7 @@ func TestCallback_ReplacesKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.Link(7, 1, "79990000000", "N"); err != nil {
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fm := &fakeMax{}
@@ -56,7 +57,7 @@ func TestCallback_RescheduleWaitlistText(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.Link(7, 1, "79990000000", "N"); err != nil {
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fm := &fakeMax{}
@@ -83,7 +84,7 @@ func TestCallback_StaleReminderKeepsF5Text(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	if err := st.Link(7, 1, "79990000000", "N"); err != nil {
+	if err := st.LinkVerified(7, 1, "79990000000", "N", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	fm := &fakeMax{}
@@ -109,7 +110,7 @@ func TestCallback_AlreadyAnsweredStillClearsKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	_ = st.Link(7, 1, "79990000000", "N")
+	_ = st.LinkVerified(7, 1, "79990000000", "N", time.Now())
 	fm := &fakeMax{}
 	h := &Handler{max: fm, gateway: &scriptGW{stored: "confirmed", already: true}, storage: st}
 	u := &maxclient.Update{
