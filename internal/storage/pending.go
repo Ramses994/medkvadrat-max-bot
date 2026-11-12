@@ -24,19 +24,32 @@ func (s *Storage) SavePendingChoice(userID int64, phone string, patientIDs []int
 	return err
 }
 
-// SaveBirthStep keeps only the chosen patient and the birth-date step. The date itself is not stored.
+// SaveBirthStep moves the pending choice to the birth-date step for patientID.
+// The full patient_ids list is kept so the user can switch rows or go «Назад».
 func (s *Storage) SaveBirthStep(userID int64, phone string, patientID int64, now time.Time) error {
-	_, err := s.db.Exec(`
-		INSERT INTO pending_choices (user_id, phone, patient_ids, created_at, step, selected_id)
-		VALUES (?, ?, ?, ?, 'birth', ?)
-		ON CONFLICT(user_id) DO UPDATE SET
-			phone = excluded.phone,
-			patient_ids = excluded.patient_ids,
-			created_at = excluded.created_at,
+	res, err := s.db.Exec(`
+		UPDATE pending_choices SET
+			phone = ?,
+			created_at = ?,
 			step = 'birth',
-			selected_id = excluded.selected_id`,
-		userID, phone, strconv.FormatInt(patientID, 10), now.UTC().Format(time.RFC3339), patientID)
-	return err
+			selected_id = ?
+		WHERE user_id = ?`,
+		phone, now.UTC().Format(time.RFC3339), patientID, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err = s.db.Exec(`
+			INSERT INTO pending_choices (user_id, phone, patient_ids, created_at, step, selected_id)
+			VALUES (?, ?, ?, ?, 'birth', ?)`,
+			userID, phone, strconv.FormatInt(patientID, 10), now.UTC().Format(time.RFC3339), patientID)
+		return err
+	}
+	return nil
 }
 
 // PendingChoice returns the saved list when it is younger than 15 minutes.

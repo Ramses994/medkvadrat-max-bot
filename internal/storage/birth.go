@@ -25,32 +25,33 @@ func (s *Storage) BirthBlocked(userID int64, now time.Time) (bool, error) {
 }
 
 // NoteBirthFailure counts a wrong date. The third failure locks linking for 24 hours.
-func (s *Storage) NoteBirthFailure(userID int64, now time.Time) (bool, error) {
+// remaining is how many attempts are left before the block (0 when blocked).
+func (s *Storage) NoteBirthFailure(userID int64, now time.Time) (remaining int, blocked bool, err error) {
 	var n int
 	var until string
-	err := s.db.QueryRow(`SELECT failures, blocked_until FROM birth_checks WHERE user_id = ?`, userID).Scan(&n, &until)
+	err = s.db.QueryRow(`SELECT failures, blocked_until FROM birth_checks WHERE user_id = ?`, userID).Scan(&n, &until)
 	if err == sql.ErrNoRows {
 		_, err = s.db.Exec(`INSERT INTO birth_checks (user_id, failures, blocked_until) VALUES (?, 1, '')`, userID)
-		return false, err
+		return 2, false, err
 	}
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
 	if until != "" {
 		at, perr := time.Parse(time.RFC3339, until)
 		if perr == nil && !now.Before(at) {
 			_, err = s.db.Exec(`UPDATE birth_checks SET failures = 1, blocked_until = '' WHERE user_id = ?`, userID)
-			return false, err
+			return 2, false, err
 		}
 	}
 	n++
 	if n < 3 {
 		_, err = s.db.Exec(`UPDATE birth_checks SET failures = ? WHERE user_id = ?`, n, userID)
-		return false, err
+		return 3 - n, false, err
 	}
 	blockedUntil := now.UTC().Add(birthBlock).Format(time.RFC3339)
 	_, err = s.db.Exec(`UPDATE birth_checks SET failures = ?, blocked_until = ? WHERE user_id = ?`, n, blockedUntil, userID)
-	return err == nil, err
+	return 0, err == nil, err
 }
 
 // ClearBirthFailures removes the counter after a successful link.
