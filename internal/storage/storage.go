@@ -103,7 +103,8 @@ func New(path string) (*Storage, error) {
 	CREATE TABLE IF NOT EXISTS birth_checks (
 		user_id INTEGER PRIMARY KEY,
 		failures INTEGER NOT NULL DEFAULT 0,
-		blocked_until TEXT NOT NULL DEFAULT ''
+		blocked_until TEXT NOT NULL DEFAULT '',
+		first_failure_at TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS consent_prompts (
@@ -128,6 +129,7 @@ func New(path string) (*Storage, error) {
 	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN step TEXT NOT NULL DEFAULT 'choose'`)
 	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN selected_id INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE consent_prompts ADD COLUMN revision INTEGER`)
+	_, _ = db.Exec(`ALTER TABLE birth_checks ADD COLUMN first_failure_at TEXT NOT NULL DEFAULT ''`)
 
 	return &Storage{db: db}, nil
 }

@@ -336,8 +336,9 @@ func (h *Handler) reshowPendingAdults(ctx context.Context, chatID, userID int64,
 		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
 		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
 	}
-	adults := filterAdults(h.today(), filterAllowedPatients(h.LinkAllow, found))
-	if len(adults) < 2 {
+	allAdults := filterAdults(h.today(), found)
+	adults := filterAllowedPatients(h.LinkAllow, allAdults)
+	if len(allAdults) < 2 || len(adults) == 0 {
 		_ = h.storage.DeletePendingChoice(userID)
 		return h.max.SendMessage(ctx, chatID, "Этот профиль больше недоступен по этому номеру. Отправьте другую цифру или «Сменить номер».")
 	}
@@ -412,7 +413,6 @@ func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone 
 	if err := h.storage.DeletePendingChoice(userID); err != nil {
 		return fmt.Errorf("storage.DeletePendingChoice: %w", err)
 	}
-	_ = h.storage.ClearBirthFailures(userID)
 	h.logLink(userID, selectedID, "linked")
 	if err := h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 		"Вы успешно авторизовались как %s! ✅\n\n"+
