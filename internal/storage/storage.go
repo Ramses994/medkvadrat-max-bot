@@ -30,6 +30,7 @@ type Storage struct {
 	db           *sql.DB
 	expireFail   error
 	omitRevision bool
+	birthFail    error
 }
 
 func New(path string) (*Storage, error) {
@@ -103,7 +104,8 @@ func New(path string) (*Storage, error) {
 	CREATE TABLE IF NOT EXISTS birth_checks (
 		user_id INTEGER PRIMARY KEY,
 		failures INTEGER NOT NULL DEFAULT 0,
-		blocked_until TEXT NOT NULL DEFAULT ''
+		blocked_until TEXT NOT NULL DEFAULT '',
+		first_failure_at TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE TABLE IF NOT EXISTS consent_prompts (
@@ -118,18 +120,94 @@ func New(path string) (*Storage, error) {
 	);
 	`
 	if _, err := db.Exec(schema); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
-	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN is_waitlist INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN appt_version TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN drop_reason TEXT NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE notice_outbox ADD COLUMN created_at DATETIME NOT NULL DEFAULT ''`)
-	_, _ = db.Exec(`ALTER TABLE user_links ADD COLUMN verified_at TEXT`)
-	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN step TEXT NOT NULL DEFAULT 'choose'`)
-	_, _ = db.Exec(`ALTER TABLE pending_choices ADD COLUMN selected_id INTEGER NOT NULL DEFAULT 0`)
-	_, _ = db.Exec(`ALTER TABLE consent_prompts ADD COLUMN revision INTEGER`)
+	if err := migrate(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := checkRequiredColumns(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 
 	return &Storage{db: db}, nil
+}
+
+type columnMigration struct {
+	table, column, ddl string
+}
+
+var columnMigrations = []columnMigration{
+	{"notice_outbox", "is_waitlist", "INTEGER NOT NULL DEFAULT 0"},
+	{"notice_outbox", "appt_version", "TEXT NOT NULL DEFAULT ''"},
+	{"notice_outbox", "drop_reason", "TEXT NOT NULL DEFAULT ''"},
+	{"notice_outbox", "created_at", "DATETIME NOT NULL DEFAULT ''"},
+	{"user_links", "verified_at", "TEXT"},
+	{"pending_choices", "step", "TEXT NOT NULL DEFAULT 'choose'"},
+	{"pending_choices", "selected_id", "INTEGER NOT NULL DEFAULT 0"},
+	{"consent_prompts", "revision", "INTEGER"},
+	{"birth_checks", "first_failure_at", "TEXT NOT NULL DEFAULT ''"},
+}
+
+// requiredColumns back the linking and consent restrictions; without them the bot must not start.
+var requiredColumns = []struct {
+	table   string
+	columns []string
+}{
+	{"user_links", []string{"user_id", "patient_id", "phone", "verified_at"}},
+	{"pending_choices", []string{"user_id", "phone", "patient_ids", "created_at", "step", "selected_id"}},
+	{"birth_checks", []string{"user_id", "failures", "blocked_until", "first_failure_at"}},
+	{"consent_prompts", []string{"nonce", "user_id", "patient_id", "kind", "text_version", "created_at", "used_at", "revision"}},
+}
+
+func migrate(db *sql.DB) error {
+	for _, m := range columnMigrations {
+		cols, err := tableColumns(db, m.table)
+		if err != nil {
+			return fmt.Errorf("миграция %s.%s: %w", m.table, m.column, err)
+		}
+		if cols[m.column] {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, m.table, m.column, m.ddl)); err != nil {
+			return fmt.Errorf("миграция %s.%s: %w", m.table, m.column, err)
+		}
+	}
+	return nil
+}
+
+func checkRequiredColumns(db *sql.DB) error {
+	for _, r := range requiredColumns {
+		cols, err := tableColumns(db, r.table)
+		if err != nil {
+			return fmt.Errorf("проверка схемы %s: %w", r.table, err)
+		}
+		for _, c := range r.columns {
+			if !cols[c] {
+				return fmt.Errorf("в таблице %s нет колонки %s: запуск остановлен, иначе ограничения не работают", r.table, c)
+			}
+		}
+	}
+	return nil
+}
+
+func tableColumns(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
 }
 
 func (s *Storage) Close() error {

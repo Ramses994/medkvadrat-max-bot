@@ -303,24 +303,73 @@ func (h *Handler) handlePatientSelection(ctx context.Context, chatID, userID int
 		_ = h.storage.Unlink(userID)
 		return h.askContact(ctx, chatID, "Список устарел. "+contactTypedPhone)
 	}
+	trimmed := strings.TrimSpace(text)
 	if step == "birth" {
-		return h.confirmBirth(ctx, chatID, userID, savedPhone, selectedID, text)
+		if strings.EqualFold(trimmed, "назад") {
+			return h.reshowPendingAdults(ctx, chatID, userID, savedPhone)
+		}
+		if choice, err := strconv.Atoi(trimmed); err == nil && choice >= 1 && choice <= len(ids) {
+			return h.beginBirthStep(ctx, chatID, userID, savedPhone, ids[choice-1])
+		}
+		return h.confirmBirth(ctx, chatID, userID, savedPhone, selectedID, trimmed)
 	}
-	choice, err := strconv.Atoi(text)
+	choice, err := strconv.Atoi(trimmed)
 	if err != nil || choice < 1 {
 		return h.max.SendMessage(ctx, chatID, "Пожалуйста, отправьте просто цифру из списка (например, 1).")
 	}
 	if choice > len(ids) {
 		return h.max.SendMessage(ctx, chatID, "Такого номера нет в списке. Пожалуйста, отправьте правильную цифру.")
 	}
-	if err := h.storage.SaveBirthStep(userID, savedPhone, ids[choice-1], h.today()); err != nil {
+	return h.beginBirthStep(ctx, chatID, userID, savedPhone, ids[choice-1])
+}
+
+func (h *Handler) beginBirthStep(ctx context.Context, chatID, userID int64, phone string, selectedID int64) error {
+	if err := h.storage.SaveBirthStep(userID, phone, selectedID, h.today()); err != nil {
 		return fmt.Errorf("storage.SaveBirthStep: %w", err)
 	}
-	return h.max.SendMessage(ctx, chatID, "Введите дату рождения выбранного пациента в формате ДД.ММ.ГГГГ")
+	return h.askBirthDate(ctx, chatID, userID, phone, selectedID)
+}
+
+func (h *Handler) reshowPendingAdults(ctx context.Context, chatID, userID int64, phone string) error {
+	found, err := h.gateway.SearchByPhone(ctx, phone)
+	if err != nil {
+		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
+		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
+	}
+	allAdults := filterAdults(h.today(), found)
+	adults := filterAllowedPatients(h.LinkAllow, allAdults)
+	if len(allAdults) < 2 || len(adults) == 0 {
+		_ = h.storage.DeletePendingChoice(userID)
+		return h.max.SendMessage(ctx, chatID, "Этот профиль больше недоступен по этому номеру. Отправьте другую цифру или «Сменить номер».")
+	}
+	return h.askWhichAdult(ctx, chatID, userID, phone, adults)
+}
+
+func (h *Handler) askBirthDate(ctx context.Context, chatID, userID int64, phone string, selectedID int64) error {
+	found, err := h.gateway.SearchByPhone(ctx, phone)
+	if err != nil {
+		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
+		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
+	}
+	for _, p := range filterAllowedPatients(h.LinkAllow, found) {
+		if int64(p.PatientID) != selectedID || !adult(p.BirthDate, h.today()) {
+			continue
+		}
+		label := profileLabel(p.FullName, p.BirthDate)
+		return h.max.SendMessage(ctx, chatID, fmt.Sprintf(
+			"Введите дату рождения профиля „%s“ в формате ДД.ММ.ГГГГ, например 05.03.1981. Чтобы выбрать другой профиль — „Назад“",
+			label))
+	}
+	// Profile may have disappeared between list and prompt; confirmBirth still validates.
+	return h.max.SendMessage(ctx, chatID,
+		"Введите дату рождения выбранного профиля в формате ДД.ММ.ГГГГ, например 05.03.1981. Чтобы выбрать другой профиль — „Назад“")
 }
 
 func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone string, selectedID int64, text string) error {
 	born, dateOK := parseBirthDate(text, h.today().Location())
+	if !dateOK {
+		return h.max.SendMessage(ctx, chatID, "Введите дату рождения цифрами, например 05.03.1981")
+	}
 	found, err := h.gateway.SearchByPhone(ctx, phone)
 	if err != nil {
 		log.Printf("gateway.SearchByPhone user=%d: %v", userID, err)
@@ -347,16 +396,19 @@ func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone 
 	if len(selected.BirthDate) >= 10 {
 		want = selected.BirthDate[:10]
 	}
-	if !dateOK || born.Format("2006-01-02") != want {
-		blocked, err := h.storage.NoteBirthFailure(userID, h.today())
-		if err != nil {
-			return err
-		}
+	matched, remaining, blocked, err := h.storage.BirthAttempt(userID, h.today(), func() bool {
+		return born.Format("2006-01-02") == want
+	})
+	if err != nil {
+		log.Printf("birth counter user=%d: %v", userID, err)
+		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
+	}
+	if !matched {
 		if blocked {
 			_ = h.storage.DeletePendingChoice(userID)
 			return h.max.SendMessage(ctx, chatID, "Обратитесь в регистратуру: "+registryPhone)
 		}
-		return h.max.SendMessage(ctx, chatID, "Дата не совпадает\nВведите дату рождения выбранного пациента в формате ДД.ММ.ГГГГ")
+		return h.max.SendMessage(ctx, chatID, fmt.Sprintf("Дата не совпадает. Осталось попыток: %d", remaining))
 	}
 	if err := h.storage.LinkVerified(userID, selectedID, phone, selected.FullName, h.today()); err != nil {
 		return fmt.Errorf("storage.Link final: %w", err)
@@ -364,7 +416,6 @@ func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone 
 	if err := h.storage.DeletePendingChoice(userID); err != nil {
 		return fmt.Errorf("storage.DeletePendingChoice: %w", err)
 	}
-	_ = h.storage.ClearBirthFailures(userID)
 	h.logLink(userID, selectedID, "linked")
 	if err := h.max.SendMessage(ctx, chatID, fmt.Sprintf(
 		"Вы успешно авторизовались как %s! ✅\n\n"+
@@ -378,8 +429,22 @@ func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone 
 
 func parseBirthDate(text string, loc *time.Location) (time.Time, bool) {
 	text = strings.TrimSpace(text)
-	born, err := time.ParseInLocation("02.01.2006", text, loc)
-	if err != nil || born.Format("02.01.2006") != text {
+	text = strings.NewReplacer("-", ".", "/", ".").Replace(text)
+	parts := strings.Split(text, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	day, errDay := strconv.Atoi(parts[0])
+	month, errMonth := strconv.Atoi(parts[1])
+	year, errYear := strconv.Atoi(parts[2])
+	if errDay != nil || errMonth != nil || errYear != nil {
+		return time.Time{}, false
+	}
+	if year < 1000 || year > 9999 || month < 1 || month > 12 || day < 1 {
+		return time.Time{}, false
+	}
+	born := time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
+	if born.Year() != year || int(born.Month()) != month || born.Day() != day {
 		return time.Time{}, false
 	}
 	return born, true
