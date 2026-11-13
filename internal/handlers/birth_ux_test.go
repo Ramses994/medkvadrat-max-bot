@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,31 @@ func TestBirthFailures_SurviveLinkAndUnlink(t *testing.T) {
 	}
 	if link, _ := st.GetByUserID(42); link.Verified() {
 		t.Fatalf("linked after block: %+v", link)
+	}
+}
+
+func TestBirthDate_CounterErrorDoesNotCompareOrLink(t *testing.T) {
+	gw := &fakeGW{patients: []gateway.Patient{
+		{PatientID: 10, FullName: "Тест Тестовый", BirthDate: "1985-01-01"},
+		{PatientID: 20, FullName: "Мартынов Дмитрий", BirthDate: "1981-03-05"},
+	}}
+	h, st := testHandler(t, []int64{10, 20}, gw)
+	contact, say := birthDialog(t, h)
+	contact()
+	say("1")
+	st.FailBirthCounter(errors.New("disk"))
+	if msg := say("01.01.1985"); !strings.Contains(msg, "Попробуйте позже") {
+		t.Fatalf("counter error reply: %q", msg)
+	}
+	if msg := say("02.02.1985"); !strings.Contains(msg, "Попробуйте позже") {
+		t.Fatalf("counter error reply: %q", msg)
+	}
+	if link, _ := st.GetByUserID(42); link.Verified() {
+		t.Fatalf("linked while the counter is broken: %+v", link)
+	}
+	st.FailBirthCounter(nil)
+	if msg := say("03.03.1985"); !strings.Contains(msg, "Осталось попыток: 2") {
+		t.Fatalf("failed writes must not count: %q", msg)
 	}
 }
 

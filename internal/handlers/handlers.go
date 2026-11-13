@@ -396,11 +396,14 @@ func (h *Handler) confirmBirth(ctx context.Context, chatID, userID int64, phone 
 	if len(selected.BirthDate) >= 10 {
 		want = selected.BirthDate[:10]
 	}
-	if born.Format("2006-01-02") != want {
-		remaining, blocked, err := h.storage.NoteBirthFailure(userID, h.today())
-		if err != nil {
-			return err
-		}
+	matched, remaining, blocked, err := h.storage.BirthAttempt(userID, h.today(), func() bool {
+		return born.Format("2006-01-02") == want
+	})
+	if err != nil {
+		log.Printf("birth counter user=%d: %v", userID, err)
+		return h.max.SendMessage(ctx, chatID, "Ошибка связи с сервером. Попробуйте позже.")
+	}
+	if !matched {
 		if blocked {
 			_ = h.storage.DeletePendingChoice(userID)
 			return h.max.SendMessage(ctx, chatID, "Обратитесь в регистратуру: "+registryPhone)
